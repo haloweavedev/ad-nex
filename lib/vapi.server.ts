@@ -1,6 +1,23 @@
 import { z } from 'zod';
 import { zodToJsonSchema } from 'zod-to-json-schema';
 
+// Import Vapi SDK
+let VapiSDK: any = null;
+
+// Dynamic import to handle potential import issues
+async function getVapiClient() {
+  if (!VapiSDK) {
+    try {
+      VapiSDK = await import('@vapi-ai/server-sdk');
+      return new VapiSDK.default({ apiKey: process.env.VAPI_API_KEY! });
+    } catch (error) {
+      console.error('Failed to import Vapi SDK:', error);
+      throw new Error('Vapi SDK not available');
+    }
+  }
+  return new VapiSDK.default({ apiKey: process.env.VAPI_API_KEY! });
+}
+
 // For now, we'll define a basic interface that matches our database schema
 interface PracticeData {
   id: string;
@@ -103,6 +120,12 @@ export async function createOrUpdateVapiAssistant(
   try {
     console.log("Creating/updating Vapi assistant for practice:", practiceData.id);
     
+    // Check if VAPI_API_KEY is available
+    if (!process.env.VAPI_API_KEY) {
+      console.error("VAPI_API_KEY not found in environment variables");
+      return null;
+    }
+
     // Personalize the system prompt
     const personalizedPrompt = BASE_SYSTEM_PROMPT
       .replace(/{PRACTICE_NAME}/g, practiceData.name || "the dental practice")
@@ -122,20 +145,7 @@ export async function createOrUpdateVapiAssistant(
             properties: (identifyPatientJsonSchema as any).properties || {},
             required: (identifyPatientJsonSchema as any).required || []
           }
-        },
-        server: {
-          url: `${process.env.NEXT_PUBLIC_APP_URL}/api/vapi/tool-handler`
-        },
-        messages: [
-          {
-            type: "request-start" as const,
-            content: "Let me look up your information in our system."
-          },
-          {
-            type: "request-failed" as const,
-            content: "I'm having trouble accessing our patient records right now. Let me have someone call you back."
-          }
-        ]
+        }
       },
       {
         type: "function" as const,
@@ -147,16 +157,7 @@ export async function createOrUpdateVapiAssistant(
             properties: (checkAvailabilityJsonSchema as any).properties || {},
             required: (checkAvailabilityJsonSchema as any).required || []
           }
-        },
-        server: {
-          url: `${process.env.NEXT_PUBLIC_APP_URL}/api/vapi/tool-handler`
-        },
-        messages: [
-          {
-            type: "request-start" as const,
-            content: "Let me check our schedule for available appointments."
-          }
-        ]
+        }
       },
       {
         type: "function" as const,
@@ -168,16 +169,7 @@ export async function createOrUpdateVapiAssistant(
             properties: (scheduleAppointmentJsonSchema as any).properties || {},
             required: (scheduleAppointmentJsonSchema as any).required || []
           }
-        },
-        server: {
-          url: `${process.env.NEXT_PUBLIC_APP_URL}/api/vapi/tool-handler`
-        },
-        messages: [
-          {
-            type: "request-start" as const,
-            content: "Let me schedule that appointment for you."
-          }
-        ]
+        }
       },
       {
         type: "function" as const,
@@ -189,16 +181,7 @@ export async function createOrUpdateVapiAssistant(
             properties: (getPatientAppointmentsJsonSchema as any).properties || {},
             required: (getPatientAppointmentsJsonSchema as any).required || []
           }
-        },
-        server: {
-          url: `${process.env.NEXT_PUBLIC_APP_URL}/api/vapi/tool-handler`
-        },
-        messages: [
-          {
-            type: "request-start" as const,
-            content: "Let me look up your current appointments."
-          }
-        ]
+        }
       },
       {
         type: "function" as const,
@@ -210,35 +193,29 @@ export async function createOrUpdateVapiAssistant(
             properties: (cancelAppointmentJsonSchema as any).properties || {},
             required: (cancelAppointmentJsonSchema as any).required || []
           }
-        },
-        server: {
-          url: `${process.env.NEXT_PUBLIC_APP_URL}/api/vapi/tool-handler`
-        },
-        messages: [
-          {
-            type: "request-start" as const,
-            content: "Let me cancel that appointment for you."
-          }
-        ]
+        }
       }
     ];
 
-    // Assistant configuration
-    const assistantConfig = {
+    // Initialize Vapi client
+    const vapi = await getVapiClient();
+
+    // Prepare assistant payload for Vapi API
+    const assistantPayload = {
       name: `LAINE - ${practiceData.name || practiceData.id}`,
       model: {
-        provider: "openai" as const,
+        provider: "openai",
         model: "gpt-4o",
         messages: [
           {
-            role: "system" as const,
+            role: "system",
             content: personalizedPrompt
           }
         ],
         tools: tools
       },
       voice: {
-        provider: "playht" as const,
+        provider: "playht",
         voiceId: practiceData.vapi_voice_id || "jennifer"
       },
       firstMessage: practiceData.vapi_first_message || 
@@ -247,15 +224,13 @@ export async function createOrUpdateVapiAssistant(
         url: `${process.env.NEXT_PUBLIC_APP_URL}/api/vapi/tool-handler`,
         secret: process.env.VAPI_WEBHOOK_SECRET || "laine-webhook-secret-change-me"
       },
-      clientMessages: ["speech-update", "transcript", "hang", "error", "status-update"] as const,
-      serverMessages: ["tool-calls", "speech-update", "transcript", "hang", "end-of-call-report", "status-update"] as const,
-      artifactPlan: {
-        recordingEnabled: true,
-        transcriptPlan: {
-          enabled: true,
-          assistantName: "Laine",
-          userName: "Patient"
-        }
+      clientMessages: ["speech-update", "transcript", "hang", "error", "status-update"],
+      serverMessages: ["tool-calls", "speech-update", "transcript", "hang", "end-of-call-report", "status-update"],
+      recordingEnabled: true,
+      transcriptPlan: {
+        enabled: true,
+        assistantName: "Laine",
+        userName: "Patient"
       },
       metadata: {
         lainePracticeId: practiceData.id
@@ -264,23 +239,55 @@ export async function createOrUpdateVapiAssistant(
       maxDurationSeconds: 1800 // 30 minutes max call duration
     };
 
-    // For now, return a mock assistant ID until we can resolve the Vapi SDK import issues
-    // In a real implementation, this would create/update the assistant via Vapi API
-    const mockAssistantId = `assistant_${practiceData.id}_${Date.now()}`;
-    
     console.log("Assistant configuration prepared:", {
-      name: assistantConfig.name,
-      voice: assistantConfig.voice.voiceId,
-      toolCount: tools.length,
-      firstMessageLength: assistantConfig.firstMessage.length,
-      promptLength: personalizedPrompt.length
+      name: assistantPayload.name,
+      voice: assistantPayload.voice.voiceId,
+      toolCount: assistantPayload.model.tools.length,
+      firstMessageLength: assistantPayload.firstMessage.length,
+      promptLength: personalizedPrompt.length,
+      serverUrl: assistantPayload.server.url
     });
-    
-    console.log("Mock assistant created:", mockAssistantId);
-    return mockAssistantId;
+
+    let assistantId: string;
+
+    if (practiceData.vapi_assistant_id) {
+      // Update existing assistant
+      console.log("Updating existing Vapi assistant:", practiceData.vapi_assistant_id);
+      try {
+        const updatedAssistant = await vapi.assistants.update(
+          practiceData.vapi_assistant_id,
+          assistantPayload
+        );
+        assistantId = updatedAssistant.id;
+        console.log("Vapi assistant updated successfully:", assistantId);
+      } catch (updateError) {
+        console.error("Failed to update assistant, will create new one:", updateError);
+        // If update fails, create a new assistant
+        const newAssistant = await vapi.assistants.create(assistantPayload);
+        assistantId = newAssistant.id;
+        console.log("New Vapi assistant created after update failure:", assistantId);
+      }
+    } else {
+      // Create new assistant
+      console.log("Creating new Vapi assistant");
+      const newAssistant = await vapi.assistants.create(assistantPayload);
+      assistantId = newAssistant.id;
+      console.log("New Vapi assistant created successfully:", assistantId);
+    }
+
+    return assistantId;
     
   } catch (error) {
     console.error("Error creating/updating Vapi assistant:", error);
+    
+    // If Vapi SDK is not available or API call fails, fall back to mock for development
+    if (error instanceof Error && error.message === 'Vapi SDK not available') {
+      console.log("Falling back to mock assistant creation for development");
+      const mockAssistantId = `assistant_${practiceData.id}_${Date.now()}`;
+      console.log("Mock assistant created:", mockAssistantId);
+      return mockAssistantId;
+    }
+    
     return null;
   }
 } 

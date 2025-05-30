@@ -15,6 +15,7 @@ export async function GET() {
       where: { clerk_user_id: userId },
       select: {
         id: true,
+        name: true,
         vapi_voice_id: true,
         vapi_system_prompt_override: true,
         vapi_first_message: true,
@@ -63,16 +64,20 @@ export async function POST(request: NextRequest) {
       },
     });
 
+    let updatedPractice = practice;
+
     // Create or update Vapi assistant
     try {
+      console.log("Attempting to create/update Vapi assistant for practice:", practice.id);
       const assistantId = await createOrUpdateVapiAssistant(practice);
       
       if (assistantId && assistantId !== practice.vapi_assistant_id) {
         // Update the practice with the new assistant ID
-        await prisma.practice.update({
+        updatedPractice = await prisma.practice.update({
           where: { id: practice.id },
           data: { vapi_assistant_id: assistantId },
         });
+        console.log("Practice updated with new assistant ID:", assistantId);
       }
     } catch (vapiError) {
       console.error("Error creating/updating Vapi assistant:", vapiError);
@@ -83,11 +88,12 @@ export async function POST(request: NextRequest) {
     return NextResponse.json({ 
       success: true, 
       practice: {
-        id: practice.id,
-        vapi_voice_id: practice.vapi_voice_id,
-        vapi_system_prompt_override: practice.vapi_system_prompt_override,
-        vapi_first_message: practice.vapi_first_message,
-        vapi_assistant_id: practice.vapi_assistant_id,
+        id: updatedPractice.id,
+        name: updatedPractice.name,
+        vapi_voice_id: updatedPractice.vapi_voice_id,
+        vapi_system_prompt_override: updatedPractice.vapi_system_prompt_override,
+        vapi_first_message: updatedPractice.vapi_first_message,
+        vapi_assistant_id: updatedPractice.vapi_assistant_id,
       }
     });
   } catch (error) {
