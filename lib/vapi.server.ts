@@ -107,6 +107,12 @@ function createVapiClient() {
   return new VapiClient({ token: process.env.VAPI_API_KEY });
 }
 
+// Helper function to validate UUID format
+function isValidUUID(str: string): boolean {
+  const uuidRegex = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+  return uuidRegex.test(str);
+}
+
 export async function createOrUpdateVapiAssistant(
   practiceData: PracticeData
 ): Promise<string | null> {
@@ -195,7 +201,7 @@ export async function createOrUpdateVapiAssistant(
     // Initialize Vapi client
     const vapi = createVapiClient();
 
-    // Prepare assistant payload for Vapi API
+    // Prepare assistant payload for Vapi API (cleaned up based on API errors)
     const assistantPayload = {
       name: `LAINE - ${practiceData.name || practiceData.id}`,
       model: {
@@ -222,14 +228,6 @@ export async function createOrUpdateVapiAssistant(
       clientMessages: ["speech-update", "transcript", "hang", "status-update"],
       serverMessages: ["tool-calls", "speech-update", "transcript", "hang", "end-of-call-report", "status-update"],
       recordingEnabled: true,
-      transcriptPlan: {
-        enabled: true,
-        assistantName: "Laine",
-        userName: "Patient"
-      },
-      metadata: {
-        lainePracticeId: practiceData.id
-      },
       silenceTimeoutSeconds: 30,
       maxDurationSeconds: 1800 // 30 minutes max call duration
     };
@@ -245,12 +243,16 @@ export async function createOrUpdateVapiAssistant(
 
     let assistantId: string;
 
-    if (practiceData.vapi_assistant_id) {
+    // Check if we have a valid UUID for existing assistant
+    const hasValidAssistantId = practiceData.vapi_assistant_id && 
+                               isValidUUID(practiceData.vapi_assistant_id);
+
+    if (hasValidAssistantId) {
       // Update existing assistant
       console.log("Updating existing Vapi assistant:", practiceData.vapi_assistant_id);
       try {
         const updatedAssistant = await vapi.assistants.update(
-          practiceData.vapi_assistant_id,
+          practiceData.vapi_assistant_id!,
           assistantPayload as any
         );
         assistantId = updatedAssistant.id;
@@ -263,8 +265,13 @@ export async function createOrUpdateVapiAssistant(
         console.log("New Vapi assistant created after update failure:", assistantId);
       }
     } else {
-      // Create new assistant
-      console.log("Creating new Vapi assistant");
+      // Create new assistant (either no ID exists or it's not a valid UUID)
+      if (practiceData.vapi_assistant_id) {
+        console.log("Existing assistant ID is not a valid UUID format, creating new assistant");
+        console.log("Invalid ID:", practiceData.vapi_assistant_id);
+      } else {
+        console.log("Creating new Vapi assistant");
+      }
       console.log("Payload:", JSON.stringify(assistantPayload, null, 2));
       const newAssistant = await vapi.assistants.create(assistantPayload as any);
       assistantId = newAssistant.id;
