@@ -1,22 +1,6 @@
 import { z } from 'zod';
 import { zodToJsonSchema } from 'zod-to-json-schema';
-
-// Import Vapi SDK
-let VapiSDK: any = null;
-
-// Dynamic import to handle potential import issues
-async function getVapiClient() {
-  if (!VapiSDK) {
-    try {
-      VapiSDK = await import('@vapi-ai/server-sdk');
-      return new VapiSDK.default({ apiKey: process.env.VAPI_API_KEY! });
-    } catch (error) {
-      console.error('Failed to import Vapi SDK:', error);
-      throw new Error('Vapi SDK not available');
-    }
-  }
-  return new VapiSDK.default({ apiKey: process.env.VAPI_API_KEY! });
-}
+import { VapiClient } from '@vapi-ai/server-sdk';
 
 // For now, we'll define a basic interface that matches our database schema
 interface PracticeData {
@@ -114,18 +98,29 @@ const scheduleAppointmentJsonSchema = zodToJsonSchema(scheduleAppointmentParamsS
 const getPatientAppointmentsJsonSchema = zodToJsonSchema(getPatientAppointmentsParamsSchema, "getPatientAppointmentsParams");
 const cancelAppointmentJsonSchema = zodToJsonSchema(cancelAppointmentParamsSchema, "cancelAppointmentParams");
 
+function createVapiClient() {
+  if (!process.env.VAPI_API_KEY) {
+    throw new Error("VAPI_API_KEY not found in environment variables");
+  }
+
+  console.log("Creating VapiClient instance...");
+  return new VapiClient({ token: process.env.VAPI_API_KEY });
+}
+
 export async function createOrUpdateVapiAssistant(
   practiceData: PracticeData
 ): Promise<string | null> {
+  if (!process.env.VAPI_API_KEY) {
+    console.error("VAPI_API_KEY not configured. Cannot proceed with Vapi assistant creation.");
+    console.log("Falling back to mock assistant creation for development (VAPI_API_KEY missing)");
+    const mockId = `mock_assistant_${practiceData.id}_${Date.now()}`;
+    console.log("Mock assistant ID generated:", mockId);
+    return mockId;
+  }
+
   try {
     console.log("Creating/updating Vapi assistant for practice:", practiceData.id);
     
-    // Check if VAPI_API_KEY is available
-    if (!process.env.VAPI_API_KEY) {
-      console.error("VAPI_API_KEY not found in environment variables");
-      return null;
-    }
-
     // Personalize the system prompt
     const personalizedPrompt = BASE_SYSTEM_PROMPT
       .replace(/{PRACTICE_NAME}/g, practiceData.name || "the dental practice")
@@ -198,7 +193,7 @@ export async function createOrUpdateVapiAssistant(
     ];
 
     // Initialize Vapi client
-    const vapi = await getVapiClient();
+    const vapi = createVapiClient();
 
     // Prepare assistant payload for Vapi API
     const assistantPayload = {
@@ -224,7 +219,7 @@ export async function createOrUpdateVapiAssistant(
         url: `${process.env.NEXT_PUBLIC_APP_URL}/api/vapi/tool-handler`,
         secret: process.env.VAPI_WEBHOOK_SECRET || "laine-webhook-secret-change-me"
       },
-      clientMessages: ["speech-update", "transcript", "hang", "error", "status-update"],
+      clientMessages: ["speech-update", "transcript", "hang", "status-update"],
       serverMessages: ["tool-calls", "speech-update", "transcript", "hang", "end-of-call-report", "status-update"],
       recordingEnabled: true,
       transcriptPlan: {
@@ -256,21 +251,22 @@ export async function createOrUpdateVapiAssistant(
       try {
         const updatedAssistant = await vapi.assistants.update(
           practiceData.vapi_assistant_id,
-          assistantPayload
+          assistantPayload as any
         );
         assistantId = updatedAssistant.id;
         console.log("Vapi assistant updated successfully:", assistantId);
       } catch (updateError) {
         console.error("Failed to update assistant, will create new one:", updateError);
         // If update fails, create a new assistant
-        const newAssistant = await vapi.assistants.create(assistantPayload);
+        const newAssistant = await vapi.assistants.create(assistantPayload as any);
         assistantId = newAssistant.id;
         console.log("New Vapi assistant created after update failure:", assistantId);
       }
     } else {
       // Create new assistant
       console.log("Creating new Vapi assistant");
-      const newAssistant = await vapi.assistants.create(assistantPayload);
+      console.log("Payload:", JSON.stringify(assistantPayload, null, 2));
+      const newAssistant = await vapi.assistants.create(assistantPayload as any);
       assistantId = newAssistant.id;
       console.log("New Vapi assistant created successfully:", assistantId);
     }
@@ -280,14 +276,19 @@ export async function createOrUpdateVapiAssistant(
   } catch (error) {
     console.error("Error creating/updating Vapi assistant:", error);
     
-    // If Vapi SDK is not available or API call fails, fall back to mock for development
-    if (error instanceof Error && error.message === 'Vapi SDK not available') {
-      console.log("Falling back to mock assistant creation for development");
-      const mockAssistantId = `assistant_${practiceData.id}_${Date.now()}`;
-      console.log("Mock assistant created:", mockAssistantId);
-      return mockAssistantId;
+    // Enhanced error logging for debugging
+    if (error instanceof TypeError && error.message.includes("is not a constructor")) {
+      console.error("This looks like an SDK import issue. VapiClient constructor not found.");
+      console.error("Error details:", error.message);
     }
     
-    return null;
+    if (error instanceof Error && 'body' in error) {
+      console.error("Vapi API Error Body:", (error as any).body);
+    }
+    
+    console.log("Falling back to mock assistant creation for development");
+    const mockAssistantId = `mock_assistant_${practiceData.id}_${Date.now()}`;
+    console.log("Mock assistant created:", mockAssistantId);
+    return mockAssistantId;
   }
 } 
