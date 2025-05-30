@@ -353,7 +353,7 @@ export default function CallLogsPage() {
 
       {/* Call Detail Modal */}
       <Dialog open={dialogOpen} onOpenChange={setDialogOpen}>
-        <DialogContent className="max-w-4xl max-h-[80vh]">
+        <DialogContent className="max-w-6xl max-h-[90vh] overflow-hidden">
           <DialogHeader>
             <DialogTitle>Call Details</DialogTitle>
             <DialogDescription>
@@ -362,103 +362,145 @@ export default function CallLogsPage() {
           </DialogHeader>
           
           {selectedLog && (
-            <div className="space-y-6">
-              {/* Call Summary */}
-              <div className="grid grid-cols-2 gap-4">
-                <Card>
-                  <CardHeader className="pb-3">
-                    <CardTitle className="text-sm">Call Information</CardTitle>
-                  </CardHeader>
-                  <CardContent className="space-y-2">
-                    <div className="flex justify-between text-sm">
-                      <span className="text-muted-foreground">Phone:</span>
-                      <span>{selectedLog.patient_phone_number || "Unknown"}</span>
-                    </div>
-                    <div className="flex justify-between text-sm">
-                      <span className="text-muted-foreground">Duration:</span>
-                      <span>{formatDuration(selectedLog.call_timestamp_start, selectedLog.call_timestamp_end)}</span>
-                    </div>
-                    <div className="flex justify-between text-sm">
-                      <span className="text-muted-foreground">Status:</span>
-                      <Badge variant={getStatusColor(selectedLog.call_status)}>
-                        {getStatusText(selectedLog.call_status)}
-                      </Badge>
-                    </div>
-                    <div className="flex justify-between text-sm">
-                      <span className="text-muted-foreground">Intent:</span>
-                      <span>{selectedLog.detected_intent || "Not detected"}</span>
-                    </div>
-                  </CardContent>
-                </Card>
-
-                <Card>
-                  <CardHeader className="pb-3">
-                    <CardTitle className="text-sm">Integration Data</CardTitle>
-                  </CardHeader>
-                  <CardContent className="space-y-2">
-                    <div className="flex justify-between text-sm">
-                      <span className="text-muted-foreground">Patient ID:</span>
-                      <span>{selectedLog.nexhealth_patient_id || "None"}</span>
-                    </div>
-                    <div className="flex justify-between text-sm">
-                      <span className="text-muted-foreground">Appointment ID:</span>
-                      <span>{selectedLog.nexhealth_appointment_id || "None"}</span>
-                    </div>
-                    <div className="flex justify-between text-sm">
-                      <span className="text-muted-foreground">Vapi Call ID:</span>
-                      <span className="font-mono text-xs">{selectedLog.vapi_call_id}</span>
-                    </div>
-                    {selectedLog.vapi_transcript_url && (
+            <ScrollArea className="max-h-[calc(90vh-120px)] overflow-auto">
+              <div className="space-y-4">
+                {/* Three Column Layout */}
+                <div className="grid grid-cols-3 gap-4 h-full">
+                  {/* Column 1: Call Information */}
+                  <Card className="h-fit">
+                    <CardHeader className="pb-3">
+                      <CardTitle className="text-sm">Call Information</CardTitle>
+                    </CardHeader>
+                    <CardContent className="space-y-3">
                       <div className="flex justify-between text-sm">
-                        <span className="text-muted-foreground">Recording:</span>
-                        <Button variant="link" size="sm" asChild className="h-auto p-0">
-                          <a href={selectedLog.vapi_transcript_url} target="_blank" rel="noopener noreferrer">
-                            <ExternalLink className="w-3 h-3 mr-1" />
-                            View
-                          </a>
-                        </Button>
+                        <span className="text-muted-foreground">Phone:</span>
+                        <span className="font-medium">{selectedLog.patient_phone_number || "Unknown"}</span>
                       </div>
-                    )}
-                  </CardContent>
-                </Card>
+                      <div className="flex justify-between text-sm">
+                        <span className="text-muted-foreground">Duration:</span>
+                        <span className="font-medium">{formatDuration(selectedLog.call_timestamp_start, selectedLog.call_timestamp_end)}</span>
+                      </div>
+                      <div className="flex justify-between text-sm items-center">
+                        <span className="text-muted-foreground">Status:</span>
+                        <Badge variant={getStatusColor(selectedLog.call_status)}>
+                          {getStatusText(selectedLog.call_status)}
+                        </Badge>
+                      </div>
+                      <div className="flex justify-between text-sm">
+                        <span className="text-muted-foreground">Intent:</span>
+                        <span className="font-medium">{selectedLog.detected_intent || "Not detected"}</span>
+                      </div>
+                      <div className="flex justify-between text-sm">
+                        <span className="text-muted-foreground">Started:</span>
+                        <span className="font-medium text-xs">{formatDate(selectedLog.call_timestamp_start)}</span>
+                      </div>
+                      {selectedLog.call_timestamp_end && (
+                        <div className="flex justify-between text-sm">
+                          <span className="text-muted-foreground">Ended:</span>
+                          <span className="font-medium text-xs">{formatDate(selectedLog.call_timestamp_end)}</span>
+                        </div>
+                      )}
+                    </CardContent>
+                  </Card>
+
+                  {/* Column 2: Integration Data */}
+                  <Card className="h-fit">
+                    <CardHeader className="pb-3">
+                      <CardTitle className="text-sm">Integration Data</CardTitle>
+                    </CardHeader>
+                    <CardContent className="space-y-3">
+                      <div className="flex justify-between text-sm">
+                        <span className="text-muted-foreground">Patient ID:</span>
+                        <span className="font-medium">{selectedLog.nexhealth_patient_id || "None"}</span>
+                      </div>
+                      <div className="flex justify-between text-sm">
+                        <span className="text-muted-foreground">Appointment ID:</span>
+                        <span className="font-medium">{selectedLog.nexhealth_appointment_id || "None"}</span>
+                      </div>
+                      <div className="space-y-1">
+                        <span className="text-muted-foreground text-sm">Vapi Call ID:</span>
+                        <code className="block text-xs bg-muted p-2 rounded break-all">{selectedLog.vapi_call_id}</code>
+                      </div>
+                      {selectedLog.vapi_transcript_url && (
+                        <div className="pt-2">
+                          <Button variant="outline" size="sm" asChild className="w-full">
+                            <a href={selectedLog.vapi_transcript_url} target="_blank" rel="noopener noreferrer">
+                              <ExternalLink className="w-3 h-3 mr-2" />
+                              View Recording
+                            </a>
+                          </Button>
+                        </div>
+                      )}
+                    </CardContent>
+                  </Card>
+
+                  {/* Column 3: Summary & Actions */}
+                  <Card className="h-fit">
+                    <CardHeader className="pb-3">
+                      <CardTitle className="text-sm">
+                        {selectedLog.summary ? "Summary" : "Call Data"}
+                      </CardTitle>
+                    </CardHeader>
+                    <CardContent className="space-y-3">
+                      {selectedLog.summary ? (
+                        <div className="space-y-2">
+                          <ScrollArea className="max-h-32 overflow-auto">
+                            <p className="text-sm leading-relaxed">{selectedLog.summary}</p>
+                          </ScrollArea>
+                        </div>
+                      ) : (
+                        <div className="text-center py-4 text-muted-foreground">
+                          <p className="text-sm">No summary available</p>
+                        </div>
+                      )}
+                      
+                      {/* Source indicator */}
+                      <div className="pt-3 border-t">
+                        <div className="flex justify-between text-sm items-center">
+                          <span className="text-muted-foreground">Source:</span>
+                          {getSourceBadge(selectedLog.source)}
+                        </div>
+                      </div>
+                    </CardContent>
+                  </Card>
+                </div>
+
+                {/* Full Width Transcript Section */}
+                {selectedLog.transcript_text ? (
+                  <Card>
+                    <CardHeader className="pb-3">
+                      <CardTitle className="text-sm flex items-center justify-between">
+                        Transcript
+                        <Badge variant="outline" className="text-xs">
+                          {selectedLog.transcript_text.length} chars
+                        </Badge>
+                      </CardTitle>
+                    </CardHeader>
+                    <CardContent>
+                      <ScrollArea className="h-64 w-full border rounded-md">
+                        <div className="p-4">
+                          <pre className="text-sm whitespace-pre-wrap leading-relaxed">
+                            {selectedLog.transcript_text}
+                          </pre>
+                        </div>
+                      </ScrollArea>
+                    </CardContent>
+                  </Card>
+                ) : (
+                  <Card>
+                    <CardContent className="text-center py-8 text-muted-foreground">
+                      <div className="space-y-2">
+                        <div className="w-12 h-12 mx-auto bg-muted rounded-full flex items-center justify-center">
+                          <Phone className="w-6 h-6" />
+                        </div>
+                        <p className="text-sm">No transcript available for this call</p>
+                        <p className="text-xs">Transcript may still be processing or unavailable</p>
+                      </div>
+                    </CardContent>
+                  </Card>
+                )}
               </div>
-
-              {/* Summary */}
-              {selectedLog.summary && (
-                <Card>
-                  <CardHeader className="pb-3">
-                    <CardTitle className="text-sm">Summary</CardTitle>
-                  </CardHeader>
-                  <CardContent>
-                    <p className="text-sm">{selectedLog.summary}</p>
-                  </CardContent>
-                </Card>
-              )}
-
-              {/* Transcript */}
-              {selectedLog.transcript_text && (
-                <Card>
-                  <CardHeader className="pb-3">
-                    <CardTitle className="text-sm">Transcript</CardTitle>
-                  </CardHeader>
-                  <CardContent>
-                    <ScrollArea className="h-64 w-full p-4 border rounded">
-                      <pre className="text-sm whitespace-pre-wrap">
-                        {selectedLog.transcript_text}
-                      </pre>
-                    </ScrollArea>
-                  </CardContent>
-                </Card>
-              )}
-
-              {!selectedLog.transcript_text && !selectedLog.summary && (
-                <Card>
-                  <CardContent className="text-center py-6 text-muted-foreground">
-                    <p>No transcript or summary available for this call</p>
-                  </CardContent>
-                </Card>
-              )}
-            </div>
+            </ScrollArea>
           )}
         </DialogContent>
       </Dialog>
