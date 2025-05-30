@@ -8,7 +8,7 @@ import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } f
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { toast } from "sonner";
-import { Eye, Phone, ChevronLeft, ChevronRight, ExternalLink } from "lucide-react";
+import { Eye, Phone, ChevronLeft, ChevronRight, ExternalLink, RefreshCw, Info } from "lucide-react";
 
 interface CallLog {
   id: string;
@@ -22,6 +22,9 @@ interface CallLog {
   nexhealth_appointment_id: string | null;
   summary: string | null;
   created_at: string;
+  source?: 'database' | 'vapi' | 'merged';
+  transcript_text?: string | null;
+  vapi_transcript_url?: string | null;
 }
 
 interface CallLogDetail extends CallLog {
@@ -38,6 +41,17 @@ interface Pagination {
   hasPrev: boolean;
 }
 
+interface CallLogsResponse {
+  callLogs: CallLog[];
+  pagination: Pagination;
+  meta?: {
+    source: 'database' | 'vapi' | 'none';
+    vapiError?: string | null;
+    assistantId?: string;
+    hasVapiKey?: boolean;
+  };
+}
+
 export default function CallLogsPage() {
   const [callLogs, setCallLogs] = useState<CallLog[]>([]);
   const [pagination, setPagination] = useState<Pagination | null>(null);
@@ -45,16 +59,34 @@ export default function CallLogsPage() {
   const [selectedLog, setSelectedLog] = useState<CallLogDetail | null>(null);
   const [detailLoading, setDetailLoading] = useState(false);
   const [dialogOpen, setDialogOpen] = useState(false);
+  const [meta, setMeta] = useState<CallLogsResponse['meta'] | null>(null);
 
-  const fetchCallLogs = async (page: number = 1) => {
+  const fetchCallLogs = async (page: number = 1, showToast: boolean = false) => {
     try {
       setLoading(true);
+      if (showToast) {
+        toast.info("Refreshing call logs from Vapi API...");
+      }
+      
       const response = await fetch(`/api/call-logs?page=${page}&limit=20`);
       
       if (response.ok) {
-        const data = await response.json();
+        const data: CallLogsResponse = await response.json();
         setCallLogs(data.callLogs);
         setPagination(data.pagination);
+        setMeta(data.meta || null);
+        
+        if (showToast) {
+          if (data.meta?.source === 'vapi') {
+            toast.success(`Loaded ${data.callLogs.length} calls from Vapi API`);
+          } else if (data.meta?.source === 'database') {
+            toast.info(`Loaded ${data.callLogs.length} calls from local database`);
+          }
+          
+          if (data.meta?.vapiError) {
+            toast.warning(`Vapi API issue: ${data.meta.vapiError}`);
+          }
+        }
       } else {
         throw new Error("Failed to fetch call logs");
       }
@@ -145,6 +177,19 @@ export default function CallLogsPage() {
     }
   };
 
+  const getSourceBadge = (source?: string) => {
+    switch (source) {
+      case 'vapi':
+        return <Badge variant="default" className="text-xs">Vapi API</Badge>;
+      case 'database':
+        return <Badge variant="secondary" className="text-xs">Database</Badge>;
+      case 'merged':
+        return <Badge variant="outline" className="text-xs">Merged</Badge>;
+      default:
+        return null;
+    }
+  };
+
   if (loading && callLogs.length === 0) {
     return (
       <div className="max-w-6xl mx-auto">
@@ -161,20 +206,63 @@ export default function CallLogsPage() {
     <div className="max-w-6xl mx-auto space-y-6">
       <Card>
         <CardHeader>
-          <CardTitle className="flex items-center gap-2">
-            <Phone className="w-5 h-5" />
-            Call Logs
-          </CardTitle>
-          <CardDescription>
-            View and manage call logs from your AI receptionist
-          </CardDescription>
+          <div className="flex items-center justify-between">
+            <div>
+              <CardTitle className="flex items-center gap-2">
+                <Phone className="w-5 h-5" />
+                Call Logs
+              </CardTitle>
+              <CardDescription>
+                View and manage call logs from your AI receptionist
+              </CardDescription>
+            </div>
+            <div className="flex items-center gap-2">
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={() => fetchCallLogs(1, true)}
+                disabled={loading}
+              >
+                <RefreshCw className={`w-4 h-4 mr-1 ${loading ? 'animate-spin' : ''}`} />
+                Refresh from Vapi
+              </Button>
+            </div>
+          </div>
         </CardHeader>
         <CardContent>
+          {/* Debug Information */}
+          {meta && (
+            <div className="mb-4 p-3 bg-muted/50 rounded-lg">
+              <div className="flex items-center gap-2 text-sm text-muted-foreground">
+                <Info className="w-4 h-4" />
+                <span>Data source: <strong>{meta.source}</strong></span>
+                {meta.assistantId && (
+                  <span>• Assistant: <code className="text-xs">{meta.assistantId.substring(0, 8)}...</code></span>
+                )}
+                {meta.hasVapiKey ? (
+                  <span>• Vapi API: <span className="text-green-600">Connected</span></span>
+                ) : (
+                  <span>• Vapi API: <span className="text-red-600">Not configured</span></span>
+                )}
+              </div>
+              {meta.vapiError && (
+                <div className="mt-1 text-sm text-amber-600">
+                  ⚠️ Vapi API Error: {meta.vapiError}
+                </div>
+              )}
+            </div>
+          )}
+
           {callLogs.length === 0 ? (
             <div className="text-center py-8 text-muted-foreground">
               <Phone className="w-12 h-12 mx-auto mb-4 opacity-50" />
               <p>No call logs yet</p>
               <p className="text-sm">Call logs will appear here once patients start calling your AI assistant</p>
+              {meta?.hasVapiKey === false && (
+                <p className="text-sm text-amber-600 mt-2">
+                  ⚠️ Vapi API key not configured - only local database logs will be shown
+                </p>
+              )}
             </div>
           ) : (
             <>
@@ -185,7 +273,7 @@ export default function CallLogsPage() {
                     <TableHead>Phone Number</TableHead>
                     <TableHead>Duration</TableHead>
                     <TableHead>Status</TableHead>
-                    <TableHead>Intent</TableHead>
+                    <TableHead>Source</TableHead>
                     <TableHead>Actions</TableHead>
                   </TableRow>
                 </TableHeader>
@@ -207,7 +295,7 @@ export default function CallLogsPage() {
                         </Badge>
                       </TableCell>
                       <TableCell>
-                        {log.detected_intent || "Not detected"}
+                        {getSourceBadge(log.source)}
                       </TableCell>
                       <TableCell>
                         <Button
