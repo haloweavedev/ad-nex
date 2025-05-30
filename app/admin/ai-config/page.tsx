@@ -7,11 +7,21 @@ import { Label } from "@/components/ui/label";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Textarea } from "@/components/ui/textarea";
 import { toast } from "sonner";
+import TestCallButton from "@/components/admin/TestCallButton";
 
 interface AIConfigData {
   vapi_voice_id: string;
   vapi_system_prompt_override: string;
   vapi_first_message: string;
+}
+
+interface PracticeData {
+  id: string;
+  name: string | null;
+  vapi_assistant_id: string | null;
+  vapi_voice_id: string | null;
+  vapi_system_prompt_override: string | null;
+  vapi_first_message: string | null;
 }
 
 const VOICE_OPTIONS = [
@@ -29,6 +39,7 @@ export default function AIConfigPage() {
     vapi_system_prompt_override: "",
     vapi_first_message: "",
   });
+  const [practiceData, setPracticeData] = useState<PracticeData | null>(null);
   const [loading, setLoading] = useState(false);
   const [initialLoading, setInitialLoading] = useState(true);
 
@@ -40,10 +51,12 @@ export default function AIConfigPage() {
         if (response.ok) {
           const data = await response.json();
           if (data.practice) {
+            const practice = data.practice;
+            setPracticeData(practice);
             setFormData({
-              vapi_voice_id: data.practice.vapi_voice_id || "jennifer",
-              vapi_system_prompt_override: data.practice.vapi_system_prompt_override || "",
-              vapi_first_message: data.practice.vapi_first_message || "",
+              vapi_voice_id: practice.vapi_voice_id || "jennifer",
+              vapi_system_prompt_override: practice.vapi_system_prompt_override || "",
+              vapi_first_message: practice.vapi_first_message || "",
             });
           }
         }
@@ -71,10 +84,16 @@ export default function AIConfigPage() {
         body: JSON.stringify(formData),
       });
 
+      const result = await response.json();
+
       if (response.ok) {
         toast.success("AI configuration saved successfully");
+        // Update practice data with the new assistant ID if returned
+        if (result.practice) {
+          setPracticeData(result.practice);
+        }
       } else {
-        throw new Error("Failed to save AI configuration");
+        throw new Error(result.error || "Failed to save AI configuration");
       }
     } catch (error) {
       console.error("Error saving AI config:", error);
@@ -93,73 +112,115 @@ export default function AIConfigPage() {
   }
 
   return (
-    <div className="max-w-2xl mx-auto">
-      <Card>
-        <CardHeader>
-          <CardTitle>AI Configuration</CardTitle>
-          <CardDescription>
-            Configure LAINE&apos;s AI voice assistant settings and prompts
-          </CardDescription>
-        </CardHeader>
-        <CardContent>
-          <form onSubmit={handleSubmit} className="space-y-6">
-            <div className="space-y-2">
-              <Label htmlFor="vapi_voice_id">Voice Selection</Label>
-              <Select
-                value={formData.vapi_voice_id}
-                onValueChange={(value) => handleInputChange("vapi_voice_id", value)}
-              >
-                <SelectTrigger>
-                  <SelectValue placeholder="Select a voice" />
-                </SelectTrigger>
-                <SelectContent>
-                  {VOICE_OPTIONS.map((voice) => (
-                    <SelectItem key={voice.value} value={voice.value}>
-                      {voice.label}
-                    </SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
-              <p className="text-sm text-muted-foreground">
-                Choose the voice that will represent your practice
-              </p>
-            </div>
+    <div className="max-w-4xl mx-auto space-y-6">
+      <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+        <Card>
+          <CardHeader>
+            <CardTitle>AI Configuration</CardTitle>
+            <CardDescription>
+              Configure LAINE&apos;s AI voice assistant settings and prompts
+            </CardDescription>
+          </CardHeader>
+          <CardContent>
+            <form onSubmit={handleSubmit} className="space-y-6">
+              <div className="space-y-2">
+                <Label htmlFor="vapi_voice_id">Voice Selection</Label>
+                <Select
+                  value={formData.vapi_voice_id}
+                  onValueChange={(value) => handleInputChange("vapi_voice_id", value)}
+                >
+                  <SelectTrigger>
+                    <SelectValue placeholder="Select a voice" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {VOICE_OPTIONS.map((voice) => (
+                      <SelectItem key={voice.value} value={voice.value}>
+                        {voice.label}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+                <p className="text-sm text-muted-foreground">
+                  Choose the voice that will represent your practice
+                </p>
+              </div>
 
-            <div className="space-y-2">
-              <Label htmlFor="vapi_first_message">First Message</Label>
-              <Textarea
-                id="vapi_first_message"
-                value={formData.vapi_first_message}
-                onChange={(e) => handleInputChange("vapi_first_message", e.target.value)}
-                placeholder="Hello, thank you for calling [Practice Name]. My name is LAINE, how can I help you today?"
-                rows={3}
-              />
-              <p className="text-sm text-muted-foreground">
-                The initial greeting message when patients call
-              </p>
-            </div>
+              <div className="space-y-2">
+                <Label htmlFor="vapi_first_message">First Message</Label>
+                <Textarea
+                  id="vapi_first_message"
+                  value={formData.vapi_first_message}
+                  onChange={(e) => handleInputChange("vapi_first_message", e.target.value)}
+                  placeholder="Hello, thank you for calling [Practice Name]. My name is LAINE, how can I help you today?"
+                  rows={3}
+                />
+                <p className="text-sm text-muted-foreground">
+                  The initial greeting message when patients call
+                </p>
+              </div>
 
-            <div className="space-y-2">
-              <Label htmlFor="vapi_system_prompt_override">System Prompt Override</Label>
-              <Textarea
-                id="vapi_system_prompt_override"
-                value={formData.vapi_system_prompt_override}
-                onChange={(e) => handleInputChange("vapi_system_prompt_override", e.target.value)}
-                placeholder="Additional instructions for the AI assistant (optional)..."
-                rows={6}
-              />
-              <p className="text-sm text-muted-foreground">
-                Custom instructions to override or supplement the default AI behavior. 
-                This will be added to the base system prompt.
-              </p>
-            </div>
+              <div className="space-y-2">
+                <Label htmlFor="vapi_system_prompt_override">System Prompt Override</Label>
+                <Textarea
+                  id="vapi_system_prompt_override"
+                  value={formData.vapi_system_prompt_override}
+                  onChange={(e) => handleInputChange("vapi_system_prompt_override", e.target.value)}
+                  placeholder="Additional instructions for the AI assistant (optional)..."
+                  rows={6}
+                />
+                <p className="text-sm text-muted-foreground">
+                  Custom instructions to override or supplement the default AI behavior. 
+                  This will be added to the base system prompt.
+                </p>
+              </div>
 
-            <Button type="submit" disabled={loading} className="w-full">
-              {loading ? "Saving..." : "Save AI Configuration"}
-            </Button>
-          </form>
-        </CardContent>
-      </Card>
+              <Button type="submit" disabled={loading} className="w-full">
+                {loading ? "Saving..." : "Save AI Configuration"}
+              </Button>
+            </form>
+          </CardContent>
+        </Card>
+
+        <div className="space-y-6">
+          <TestCallButton
+            assistantId={practiceData?.vapi_assistant_id || null}
+            vapiPublicKey={process.env.NEXT_PUBLIC_VAPI_PUBLIC_KEY}
+          />
+          
+          {practiceData && (
+            <Card>
+              <CardHeader>
+                <CardTitle>Assistant Status</CardTitle>
+                <CardDescription>Current configuration status</CardDescription>
+              </CardHeader>
+              <CardContent className="space-y-3">
+                <div className="flex justify-between">
+                  <span className="text-sm text-muted-foreground">Practice:</span>
+                  <span className="text-sm font-medium">{practiceData.name || "Not configured"}</span>
+                </div>
+                <div className="flex justify-between">
+                  <span className="text-sm text-muted-foreground">Voice:</span>
+                  <span className="text-sm font-medium">
+                    {VOICE_OPTIONS.find(v => v.value === practiceData.vapi_voice_id)?.label || "Jennifer (Default)"}
+                  </span>
+                </div>
+                <div className="flex justify-between">
+                  <span className="text-sm text-muted-foreground">Assistant ID:</span>
+                  <span className="text-sm font-mono">
+                    {practiceData.vapi_assistant_id || "Not created"}
+                  </span>
+                </div>
+                <div className="flex justify-between">
+                  <span className="text-sm text-muted-foreground">Custom Prompt:</span>
+                  <span className="text-sm">
+                    {practiceData.vapi_system_prompt_override ? "Yes" : "No"}
+                  </span>
+                </div>
+              </CardContent>
+            </Card>
+          )}
+        </div>
+      </div>
     </div>
   );
 } 
