@@ -550,7 +550,7 @@ async function handleIdentifyPatient(params: any, practice: any, vapiCallId: str
   }
 }
 
-async function handleFindAppointmentSlots(params: any, practice: any, _vapiCallId: string) {
+async function handleFindAppointmentSlots(params: any, practice: any, _vapiCallId: string): Promise<ToolResponse> {
   console.log("=== FINDING APPOINTMENT SLOTS ===");
   console.log("Parameters:", JSON.stringify(params, null, 2));
 
@@ -558,12 +558,18 @@ async function handleFindAppointmentSlots(params: any, practice: any, _vapiCallI
     // Validate practice configuration
     if (!practice.nexhealth_subdomain || !practice.nexhealth_location_id) {
       return {
-        success: false,
-        error: "Practice configuration is incomplete. Please contact support."
+        result: "Practice configuration is incomplete. Please contact support."
       };
     }
 
     const { service_description, requested_date, search_type } = params;
+
+    // Validate required parameters
+    if (!service_description) {
+      return {
+        result: "I need to know what type of service you're looking for. Could you tell me what kind of appointment you need?"
+      };
+    }
 
     // Map service description to NexHealth appointment type
     const serviceMapping = await db.serviceMapping.findFirst({
@@ -578,8 +584,7 @@ async function handleFindAppointmentSlots(params: any, practice: any, _vapiCallI
 
     if (!serviceMapping) {
       return {
-        success: false,
-        error: `I'm sorry, I couldn't find a service called '${service_description}'. Can you describe it differently or choose from common services like cleaning or check-up?`
+        result: `I'm sorry, I couldn't find a service called '${service_description}'. Can you describe it differently or choose from common services like cleaning or check-up?`
       };
     }
 
@@ -587,8 +592,16 @@ async function handleFindAppointmentSlots(params: any, practice: any, _vapiCallI
     const startDate = requested_date || new Date().toISOString().split('T')[0];
     const searchDays = search_type === "specific_date" ? 1 : 30;
 
+    console.log("Search parameters:", {
+      appointment_type_id: serviceMapping.nexhealth_appointment_type_id,
+      provider_ids: practice.nexhealth_selected_provider_ids,
+      operatory_ids: practice.nexhealth_default_operatory_ids,
+      start_date: startDate,
+      days: searchDays
+    });
+
     // Get appointment slots from NexHealth
-    const slotsData = await getAppointmentSlots(
+    const slotsResponse = await getAppointmentSlots(
       practice.nexhealth_subdomain,
       practice.nexhealth_location_id,
       {
@@ -600,47 +613,73 @@ async function handleFindAppointmentSlots(params: any, practice: any, _vapiCallI
       }
     );
 
-    console.log("Slots response:", JSON.stringify(slotsData, null, 2));
+    console.log("Raw slots response:", JSON.stringify(slotsResponse, null, 2));
 
-    if (!slotsData || !Array.isArray(slotsData) || slotsData.length === 0) {
+    // Process the NexHealth response structure: data[].slots[]
+    const allSlots: any[] = [];
+    if (slotsResponse && Array.isArray(slotsResponse)) {
+      // Extract all slots from all providers/locations
+      slotsResponse.forEach((providerData: any) => {
+        if (providerData.slots && Array.isArray(providerData.slots)) {
+          providerData.slots.forEach((slot: any) => {
+            allSlots.push({
+              time: slot.time,
+              end_time: slot.end_time,
+              provider_id: providerData.pid,
+              operatory_id: slot.operatory_id,
+              location_id: providerData.lid
+            });
+          });
+        }
+      });
+    }
+
+    console.log("Processed slots:", JSON.stringify(allSlots, null, 2));
+
+    if (allSlots.length === 0) {
+      const dateDisplay = search_type === "specific_date" ? `on ${requested_date}` : "in the next month";
       return {
-        success: true,
-        available_slots: [],
-        message_to_patient: `I'm sorry, I don't see any openings for ${service_description} ${search_type === "specific_date" ? `on ${requested_date}` : "in the next month"}. Would you like to try another date?`
+        result: `I'm sorry, I don't see any openings for ${service_description} ${dateDisplay}. Would you like to try another date or should I check for the next available appointment?`
       };
     }
 
-    // Format slots for response
-    const formattedSlots = slotsData.slice(0, 5).map(slot => ({
-      time: slot.start_time,
-      provider_id: slot.provider_id,
-      operatory_id: slot.operatory_id,
-      end_time: slot.end_time
-    }));
-
-    const dateStr = search_type === "specific_date" ? `on ${requested_date}` : "coming up";
-    const slotDescriptions = formattedSlots.map(slot => {
-      const date = new Date(slot.time);
-      return date.toLocaleDateString() + " at " + date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+    // Format slots for response (limit to 5 most relevant)
+    const limitedSlots = allSlots.slice(0, 5);
+    const slotDescriptions = limitedSlots.map(slot => {
+      try {
+        const date = new Date(slot.time);
+        const dateStr = date.toLocaleDateString('en-US', { 
+          weekday: 'long', 
+          month: 'long', 
+          day: 'numeric' 
+        });
+        const timeStr = date.toLocaleTimeString('en-US', { 
+          hour: 'numeric', 
+          minute: '2-digit',
+          hour12: true 
+        });
+        return `${dateStr} at ${timeStr}`;
+      } catch (dateError) {
+        console.error("Date formatting error:", dateError, "for slot:", slot);
+        return `${slot.time}`;
+      }
     }).join(", ");
 
+    const dateContext = search_type === "specific_date" ? `on ${requested_date}` : "coming up";
+    
     return {
-      success: true,
-      available_slots: formattedSlots,
-      appointment_type_id_used: serviceMapping.nexhealth_appointment_type_id,
-      message_to_patient: `Great! For ${service_description} ${dateStr}, I have these times available: ${slotDescriptions}. Which time works best for you?`
+      result: `Great! For ${service_description} ${dateContext}, I have these times available: ${slotDescriptions}. Which time works best for you?`
     };
 
   } catch (error) {
     console.error("❌ Error finding appointment slots:", error);
     return {
-      success: false,
-      error: "I'm having trouble checking availability right now. Please try again or call the office directly."
+      result: "I'm having trouble checking availability right now. Please try again or call the office directly."
     };
   }
 }
 
-async function handleBookAppointment(params: any, practice: any, _vapiCallId: string) {
+async function handleBookAppointment(params: any, practice: any, _vapiCallId: string): Promise<ToolResponse> {
   console.log("=== BOOKING APPOINTMENT ===");
   console.log("Parameters:", JSON.stringify(params, null, 2));
 
@@ -648,8 +687,7 @@ async function handleBookAppointment(params: any, practice: any, _vapiCallId: st
     // Validate practice configuration
     if (!practice.nexhealth_subdomain || !practice.nexhealth_location_id) {
       return {
-        success: false,
-        error: "Practice configuration is incomplete. Please contact support."
+        result: "Practice configuration is incomplete. Please contact support."
       };
     }
 
@@ -665,8 +703,7 @@ async function handleBookAppointment(params: any, practice: any, _vapiCallId: st
 
     if (!patient_id || !provider_id || !appointment_type_id || !start_time || !end_time) {
       return {
-        success: false,
-        error: "Missing required information for booking. Please try again."
+        result: "Missing required information for booking. Please try again."
       };
     }
 
@@ -718,50 +755,30 @@ async function handleBookAppointment(params: any, practice: any, _vapiCallId: st
     const timeStr = appointmentDate.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
 
     return {
-      success: true,
-      appointment_id: appointmentData.id.toString(),
-      confirmation_message_to_patient: `Perfect! You're all set for ${dateStr} at ${timeStr}. Your appointment confirmation number is ${appointmentData.id}. We'll see you then!`
+      result: `Perfect! You're all set for ${dateStr} at ${timeStr}. Your appointment confirmation number is ${appointmentData.id}. We'll see you then!`
     };
 
   } catch (error) {
     console.error("❌ Error booking appointment:", error);
     return {
-      success: false,
-      error: "I'm sorry, I couldn't complete your booking right now. Please try again or call the office directly."
+      result: "I'm sorry, I couldn't complete your booking right now. Please try again or call the office directly."
     };
   }
 }
 
-// Placeholder implementations for future tools
-async function handleGetPatientAppointments(params: any, _practice: any) {
+// Updated placeholder implementations for future tools
+async function handleGetPatientAppointments(params: any, _practice: any): Promise<ToolResponse> {
   console.log("Getting patient appointments:", params);
   // Mock existing appointments
   return {
-    success: true,
-    message: "Retrieved patient appointments",
-    data: {
-      appointments: [
-        {
-          id: "apt_existing_1",
-          date: "2024-02-20",
-          time: "10:00 AM",
-          service: "Dental Cleaning",
-          status: "confirmed",
-        },
-      ],
-    },
+    result: "I found your existing appointments. You have a dental cleaning scheduled for February 20th at 10:00 AM. Would you like to schedule another appointment?"
   };
 }
 
-async function handleCancelAppointment(params: any, _practice: any) {
+async function handleCancelAppointment(params: any, _practice: any): Promise<ToolResponse> {
   console.log("Canceling appointment:", params);
   // Mock appointment cancellation
   return {
-    success: true,
-    message: "Appointment canceled successfully",
-    data: {
-      canceledAppointmentId: params.appointmentId || "apt_mock",
-      cancellationDate: new Date().toISOString(),
-    },
+    result: "Your appointment has been successfully canceled. We'll send you a confirmation via text message. Is there anything else I can help you with?"
   };
 } 

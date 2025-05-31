@@ -1,5 +1,3 @@
-import { z } from 'zod';
-import { zodToJsonSchema } from 'zod-to-json-schema';
 import { VapiClient } from '@vapi-ai/server-sdk';
 
 // For now, we'll define a basic interface that matches our database schema
@@ -102,50 +100,6 @@ Always use the appropriate tools to help patients effectively. If you need infor
 
 {PRACTICE_CUSTOM_INSTRUCTIONS}`;
 
-// Tool parameter schemas using Zod
-const identifyPatientParamsSchema = z.object({
-  patientName: z.string().optional().describe("The full name of the patient"),
-  dateOfBirth: z.string().optional().describe("Patient's date of birth in YYYY-MM-DD format"),
-  phoneNumber: z.string().optional().describe("Patient's phone number")
-}).describe("Parameters to identify an existing patient or gather details for a new patient");
-
-const checkAvailabilityParamsSchema = z.object({
-  serviceName: z.string().describe("Type of dental service requested (e.g., cleaning, checkup, emergency)"),
-  requestedDate: z.string().optional().describe("Preferred date in YYYY-MM-DD format (optional)"),
-  requestedTime: z.string().optional().describe("Preferred time in HH:MM format (optional)")
-}).describe("Parameters to check appointment availability");
-
-const scheduleAppointmentParamsSchema = z.object({
-  patientName: z.string().describe("Full name of the patient"),
-  phoneNumber: z.string().describe("Patient's phone number"),
-  email: z.string().optional().describe("Patient's email address"),
-  serviceName: z.string().describe("Type of dental service to schedule"),
-  appointmentDate: z.string().describe("Appointment date in YYYY-MM-DD format"),
-  appointmentTime: z.string().describe("Appointment time in HH:MM format"),
-  isNewPatient: z.boolean().optional().describe("Whether this is a new patient"),
-  notes: z.string().optional().describe("Any additional notes or special requests")
-}).describe("Parameters to schedule a new appointment");
-
-const getPatientAppointmentsParamsSchema = z.object({
-  patientName: z.string().optional().describe("Patient's full name"),
-  phoneNumber: z.string().optional().describe("Patient's phone number"),
-  patientId: z.string().optional().describe("Patient ID if available")
-}).describe("Parameters to retrieve existing appointments for a patient");
-
-const cancelAppointmentParamsSchema = z.object({
-  appointmentId: z.string().optional().describe("Appointment ID to cancel"),
-  patientName: z.string().optional().describe("Patient's full name"),
-  phoneNumber: z.string().optional().describe("Patient's phone number"),
-  appointmentDate: z.string().optional().describe("Date of appointment to cancel in YYYY-MM-DD format")
-}).describe("Parameters to cancel an existing appointment");
-
-// Convert Zod schemas to JSON Schema for Vapi
-const identifyPatientJsonSchema = zodToJsonSchema(identifyPatientParamsSchema, "identifyPatientParams");
-const checkAvailabilityJsonSchema = zodToJsonSchema(checkAvailabilityParamsSchema, "checkAvailabilityParams");
-const scheduleAppointmentJsonSchema = zodToJsonSchema(scheduleAppointmentParamsSchema, "scheduleAppointmentParams");
-const getPatientAppointmentsJsonSchema = zodToJsonSchema(getPatientAppointmentsParamsSchema, "getPatientAppointmentsParams");
-const cancelAppointmentJsonSchema = zodToJsonSchema(cancelAppointmentParamsSchema, "cancelAppointmentParams");
-
 function createVapiClient() {
   if (!process.env.VAPI_API_KEY) {
     throw new Error("VAPI_API_KEY not found in environment variables");
@@ -182,7 +136,7 @@ export async function createOrUpdateVapiAssistant(
       .replace(/{PRACTICE_CUSTOM_INSTRUCTIONS}/g, 
         practiceData.vapi_system_prompt_override || "");
 
-    // Define tool configurations for Vapi
+    // Define tool configurations for Vapi with explicit parameter schemas
     const tools = [
       {
         type: "function" as const,
@@ -191,8 +145,33 @@ export async function createOrUpdateVapiAssistant(
           description: "Identifies an existing patient or gathers details for a new patient. Use this when a patient calls to book an appointment or inquire about their account.",
           parameters: {
             type: "object",
-            properties: (identifyPatientJsonSchema as any).properties || {},
-            required: (identifyPatientJsonSchema as any).required || []
+            properties: {
+              first_name: {
+                type: "string",
+                description: "Patient's first name"
+              },
+              last_name: {
+                type: "string", 
+                description: "Patient's last name"
+              },
+              phone_number: {
+                type: "string",
+                description: "Patient's phone number"
+              },
+              date_of_birth: {
+                type: "string",
+                description: "Patient's date of birth in YYYY-MM-DD format (optional)"
+              },
+              email: {
+                type: "string",
+                description: "Patient's email address (optional)"
+              },
+              gender: {
+                type: "string",
+                description: "Patient's gender (Male, Female, Other) (optional)"
+              }
+            },
+            required: ["first_name", "last_name", "phone_number"]
           }
         }
       },
@@ -203,8 +182,22 @@ export async function createOrUpdateVapiAssistant(
           description: "Checks appointment availability for a specific dental service and date/time preferences.",
           parameters: {
             type: "object",
-            properties: (checkAvailabilityJsonSchema as any).properties || {},
-            required: (checkAvailabilityJsonSchema as any).required || []
+            properties: {
+              service_description: {
+                type: "string",
+                description: "Type of dental service requested (e.g., cleaning, checkup, emergency, root canal)"
+              },
+              requested_date: {
+                type: "string",
+                description: "Preferred date in YYYY-MM-DD format"
+              },
+              search_type: {
+                type: "string", 
+                enum: ["specific_date", "next_available"],
+                description: "Whether to search for a specific date or next available appointment"
+              }
+            },
+            required: ["service_description"]
           }
         }
       },
@@ -215,8 +208,37 @@ export async function createOrUpdateVapiAssistant(
           description: "Schedules a new appointment after confirming patient details and availability.",
           parameters: {
             type: "object",
-            properties: (scheduleAppointmentJsonSchema as any).properties || {},
-            required: (scheduleAppointmentJsonSchema as any).required || []
+            properties: {
+              patient_id: {
+                type: "string",
+                description: "NexHealth patient ID"
+              },
+              provider_id: {
+                type: "string",
+                description: "Provider ID for the appointment"
+              },
+              operatory_id: {
+                type: "string",
+                description: "Operatory ID for the appointment"
+              },
+              appointment_type_id: {
+                type: "string",
+                description: "Appointment type ID from availability check"
+              },
+              start_time: {
+                type: "string",
+                description: "Appointment start time in ISO format"
+              },
+              end_time: {
+                type: "string", 
+                description: "Appointment end time in ISO format"
+              },
+              note: {
+                type: "string",
+                description: "Additional notes for the appointment (optional)"
+              }
+            },
+            required: ["patient_id", "provider_id", "appointment_type_id", "start_time", "end_time"]
           }
         }
       },
@@ -227,8 +249,17 @@ export async function createOrUpdateVapiAssistant(
           description: "Retrieves existing appointments for a patient.",
           parameters: {
             type: "object",
-            properties: (getPatientAppointmentsJsonSchema as any).properties || {},
-            required: (getPatientAppointmentsJsonSchema as any).required || []
+            properties: {
+              patient_id: {
+                type: "string",
+                description: "NexHealth patient ID"
+              },
+              phone_number: {
+                type: "string",
+                description: "Patient's phone number as alternative identifier"
+              }
+            },
+            required: []
           }
         }
       },
@@ -239,8 +270,21 @@ export async function createOrUpdateVapiAssistant(
           description: "Cancels an existing appointment for a patient.",
           parameters: {
             type: "object",
-            properties: (cancelAppointmentJsonSchema as any).properties || {},
-            required: (cancelAppointmentJsonSchema as any).required || []
+            properties: {
+              appointment_id: {
+                type: "string",
+                description: "NexHealth appointment ID to cancel"
+              },
+              patient_id: {
+                type: "string",
+                description: "Patient ID (optional if appointment_id provided)"
+              },
+              cancellation_reason: {
+                type: "string",
+                description: "Reason for cancellation (optional)"
+              }
+            },
+            required: ["appointment_id"]
           }
         }
       }
