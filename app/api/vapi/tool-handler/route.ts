@@ -69,34 +69,47 @@ export async function POST(request: NextRequest) {
     console.log("Raw body preview (first 500 chars):", rawBody.substring(0, 500));
     
     const vapiSignature = request.headers.get("X-Vapi-Signature");
+    const vapiSecret = request.headers.get("x-vapi-secret");
     console.log("Vapi signature header:", vapiSignature);
+    console.log("Vapi secret header:", vapiSecret);
     
     // --- Webhook Signature Verification ---
     const WEBHOOK_SECRET = process.env.VAPI_WEBHOOK_SECRET || "laine-webhook-secret-change-me";
     console.log("Using webhook secret:", WEBHOOK_SECRET.substring(0, 10) + "...");
     
-    if (!vapiSignature || !WEBHOOK_SECRET) {
-      console.warn("Webhook signature or secret missing.");
+    // Check if Vapi is sending the secret directly in x-vapi-secret header
+    if (vapiSecret) {
+      console.log("Using direct secret verification");
+      if (vapiSecret !== WEBHOOK_SECRET) {
+        console.warn("Invalid webhook secret in x-vapi-secret header");
+        return new Response("Forbidden: Invalid secret", { status: 403 });
+      }
+      console.log("✅ Direct secret verification passed");
+    } else if (vapiSignature && WEBHOOK_SECRET) {
+      // Traditional HMAC signature verification
+      console.log("Using HMAC signature verification");
+      const generatedSignature = crypto
+        .createHmac("sha256", WEBHOOK_SECRET)
+        .update(rawBody)
+        .digest("hex");
+
+      const expectedSignature = `sha256=${generatedSignature}`;
+      console.log("Generated signature:", expectedSignature);
+      console.log("Received signature:", vapiSignature);
+      console.log("Signatures match:", expectedSignature === vapiSignature);
+
+      if (!crypto.timingSafeEqual(Buffer.from(expectedSignature), Buffer.from(vapiSignature))) {
+        console.warn("Invalid webhook signature.");
+        return new Response("Forbidden: Invalid signature", { status: 403 });
+      }
+      console.log("✅ HMAC signature verification passed");
+    } else {
+      console.warn("No valid authentication method found");
       console.log("Signature present:", !!vapiSignature);
-      console.log("Secret present:", !!WEBHOOK_SECRET);
-      return new Response("Unauthorized: Signature or secret missing", { status: 401 });
+      console.log("Secret present:", !!vapiSecret);
+      console.log("Webhook secret configured:", !!WEBHOOK_SECRET);
+      return new Response("Unauthorized: No valid authentication", { status: 401 });
     }
-
-    const generatedSignature = crypto
-      .createHmac("sha256", WEBHOOK_SECRET)
-      .update(rawBody)
-      .digest("hex");
-
-    const expectedSignature = `sha256=${generatedSignature}`;
-    console.log("Generated signature:", expectedSignature);
-    console.log("Received signature:", vapiSignature);
-    console.log("Signatures match:", expectedSignature === vapiSignature);
-
-    if (!crypto.timingSafeEqual(Buffer.from(expectedSignature), Buffer.from(vapiSignature))) {
-      console.warn("Invalid webhook signature.");
-      return new Response("Forbidden: Invalid signature", { status: 403 });
-    }
-    console.log("✅ Signature verification passed");
     // --- End Signature Verification ---
 
     const payload = JSON.parse(rawBody);
