@@ -353,7 +353,7 @@ export default function CallLogsPage() {
 
       {/* Call Detail Modal */}
       <Dialog open={dialogOpen} onOpenChange={setDialogOpen}>
-        <DialogContent className="max-w-6xl max-h-[90vh] overflow-hidden">
+        <DialogContent className="call-detail-modal max-w-9xl min-w-[1200px] max-h-[90vh] overflow-hidden">
           <DialogHeader>
             <DialogTitle>Call Details</DialogTitle>
             <DialogDescription>
@@ -365,9 +365,9 @@ export default function CallLogsPage() {
             <ScrollArea className="max-h-[calc(90vh-120px)] overflow-auto">
               <div className="space-y-4">
                 {/* Three Column Layout */}
-                <div className="grid grid-cols-3 gap-4 h-full">
+                <div className="grid grid-cols-3 gap-4 h-full min-h-0">
                   {/* Column 1: Call Information */}
-                  <Card className="h-fit">
+                  <Card className="h-fit min-h-0">
                     <CardHeader className="pb-3">
                       <CardTitle className="text-sm">Call Information</CardTitle>
                     </CardHeader>
@@ -404,7 +404,7 @@ export default function CallLogsPage() {
                   </Card>
 
                   {/* Column 2: Integration Data */}
-                  <Card className="h-fit">
+                  <Card className="h-fit min-h-0">
                     <CardHeader className="pb-3">
                       <CardTitle className="text-sm">Integration Data</CardTitle>
                     </CardHeader>
@@ -419,14 +419,30 @@ export default function CallLogsPage() {
                       </div>
                       <div className="space-y-1">
                         <span className="text-muted-foreground text-sm">Vapi Call ID:</span>
-                        <code className="block text-xs bg-muted p-2 rounded break-all">{selectedLog.vapi_call_id}</code>
+                        <ScrollArea className="max-h-16 overflow-auto">
+                          <code className="block text-xs bg-muted p-2 rounded break-all">{selectedLog.vapi_call_id}</code>
+                        </ScrollArea>
                       </div>
                       {selectedLog.vapi_transcript_url && (
-                        <div className="pt-2">
-                          <Button variant="outline" size="sm" asChild className="w-full">
+                        <div className="pt-2 space-y-2">
+                          <span className="text-muted-foreground text-sm">Call Recording:</span>
+                          <div className="w-full">
+                            <audio 
+                              controls 
+                              className="w-full"
+                              preload="metadata"
+                              style={{ maxWidth: '100%' }}
+                            >
+                              <source src={selectedLog.vapi_transcript_url} type="audio/mpeg" />
+                              <source src={selectedLog.vapi_transcript_url} type="audio/wav" />
+                              <source src={selectedLog.vapi_transcript_url} type="audio/mp4" />
+                              Your browser does not support the audio element.
+                            </audio>
+                          </div>
+                          <Button variant="link" size="sm" asChild className="w-full text-xs">
                             <a href={selectedLog.vapi_transcript_url} target="_blank" rel="noopener noreferrer">
-                              <ExternalLink className="w-3 h-3 mr-2" />
-                              View Recording
+                              <ExternalLink className="w-3 h-3 mr-1" />
+                              Open in new tab
                             </a>
                           </Button>
                         </div>
@@ -435,7 +451,7 @@ export default function CallLogsPage() {
                   </Card>
 
                   {/* Column 3: Summary & Actions */}
-                  <Card className="h-fit">
+                  <Card className="h-fit min-h-0">
                     <CardHeader className="pb-3">
                       <CardTitle className="text-sm">
                         {selectedLog.summary ? "Summary" : "Call Data"}
@@ -444,8 +460,10 @@ export default function CallLogsPage() {
                     <CardContent className="space-y-3">
                       {selectedLog.summary ? (
                         <div className="space-y-2">
-                          <ScrollArea className="max-h-32 overflow-auto">
-                            <p className="text-sm leading-relaxed">{selectedLog.summary}</p>
+                          <ScrollArea className="max-h-40 overflow-auto">
+                            <div className="pr-3">
+                              <p className="text-sm leading-relaxed">{selectedLog.summary}</p>
+                            </div>
                           </ScrollArea>
                         </div>
                       ) : (

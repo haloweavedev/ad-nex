@@ -18,7 +18,8 @@ export async function GET() {
         name: true,
         nexhealth_subdomain: true,
         nexhealth_location_id: true,
-        nexhealth_api_key: true,
+        nexhealth_selected_provider_ids: true,
+        nexhealth_default_operatory_ids: true,
         timezone: true,
       },
     });
@@ -46,7 +47,8 @@ export async function POST(request: NextRequest) {
       name,
       nexhealth_subdomain,
       nexhealth_location_id,
-      nexhealth_api_key,
+      nexhealth_selected_provider_ids,
+      nexhealth_default_operatory_ids,
       timezone,
     } = body;
 
@@ -58,14 +60,16 @@ export async function POST(request: NextRequest) {
         name,
         nexhealth_subdomain,
         nexhealth_location_id,
-        nexhealth_api_key,
+        nexhealth_selected_provider_ids: nexhealth_selected_provider_ids || [],
+        nexhealth_default_operatory_ids: nexhealth_default_operatory_ids || [],
         timezone,
       },
       update: {
         name,
         nexhealth_subdomain,
         nexhealth_location_id,
-        nexhealth_api_key,
+        nexhealth_selected_provider_ids: nexhealth_selected_provider_ids || [],
+        nexhealth_default_operatory_ids: nexhealth_default_operatory_ids || [],
         timezone,
       },
     });
@@ -93,6 +97,8 @@ export async function POST(request: NextRequest) {
         name: practice.name,
         nexhealth_subdomain: practice.nexhealth_subdomain,
         nexhealth_location_id: practice.nexhealth_location_id,
+        nexhealth_selected_provider_ids: practice.nexhealth_selected_provider_ids,
+        nexhealth_default_operatory_ids: practice.nexhealth_default_operatory_ids,
         timezone: practice.timezone,
       }
     });

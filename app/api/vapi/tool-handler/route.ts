@@ -1,6 +1,11 @@
 import { NextRequest, NextResponse } from "next/server";
 import crypto from "crypto";
 import db from "@/lib/prisma";
+import { 
+  createPatient, 
+  getAppointmentSlots, 
+  bookAppointment
+} from "@/lib/nexhealth.server";
 
 // GET method for health check and connectivity testing
 export async function GET() {
@@ -161,7 +166,7 @@ export async function POST(request: NextRequest) {
             }
 
             // Return tool results
-            const toolResults = await executeTools(message.toolCallList || [], practice);
+            const toolResults = await executeTools(message.toolCallList || [], practice, vapiCallId);
             return NextResponse.json({ results: toolResults });
 
           } else if (message.type === "status-update") {
@@ -201,7 +206,7 @@ export async function POST(request: NextRequest) {
               practice_id: practice.id,
               call_timestamp_start: message?.call?.startedAt ? new Date(message.call.startedAt) : new Date(),
               call_status: "IN_PROGRESS",
-              transcript_text: message.transcript,
+              transcript_text: message?.transcript || null,
               patient_phone_number: message?.call?.customerPhoneNumber || null,
             };
             console.log("Preparing transcript log data:", JSON.stringify(transcriptUpdateData, null, 2));
@@ -210,7 +215,7 @@ export async function POST(request: NextRequest) {
               const upsertResult = await db.callLog.upsert({
                 where: { vapi_call_id: vapiCallId },
                 update: {
-                  transcript_text: message.transcript,
+                  transcript_text: message?.transcript || null,
                 },
                 create: transcriptUpdateData,
               });
@@ -220,17 +225,18 @@ export async function POST(request: NextRequest) {
             }
 
           } else if (message.type === "end-of-call-report") {
-            // Final call update with complete data
+            // Final call summary and cleanup
             console.log("=== HANDLING END-OF-CALL-REPORT ===");
-            console.log("End-of-call report keys:", Object.keys(message));
-            console.log("Call data:", JSON.stringify(message?.call, null, 2));
-            console.log("Artifact data:", JSON.stringify(message?.artifact, null, 2));
-            console.log("Analysis data:", JSON.stringify(message?.analysis, null, 2));
+            console.log("End-of-call data:", { 
+              call: message?.call, 
+              analysis: message?.analysis, 
+              artifact: message?.artifact 
+            });
             
             const endOfCallData = {
               vapi_call_id: vapiCallId,
               practice_id: practice.id,
-              call_timestamp_start: message.call?.startedAt ? new Date(message.call.startedAt) : new Date(),
+              call_timestamp_start: message?.call?.startedAt ? new Date(message.call.startedAt) : new Date(),
               call_timestamp_end: message.call?.endedAt ? new Date(message.call.endedAt) : new Date(),
               call_status: "ENDED",
               transcript_text: message.artifact?.transcript || null,
@@ -308,7 +314,7 @@ async function handleToolCalls(message: any, practice: any, vapiCallId: string) 
   // Tool call handling logic will be expanded in future phases
 }
 
-async function executeTools(toolCallList: any[], practice: any) {
+async function executeTools(toolCallList: any[], practice: any, vapiCallId: string) {
   const results = [];
 
   for (const toolCall of toolCallList) {
@@ -317,14 +323,14 @@ async function executeTools(toolCallList: any[], practice: any) {
 
     try {
       switch (fn.name) {
-        case "identify_patient":
+        case "identifyOrRegisterPatient":
           result = await handleIdentifyPatient(JSON.parse(fn.arguments), practice);
           break;
-        case "check_availability":
-          result = await handleCheckAvailability(JSON.parse(fn.arguments), practice);
+        case "findAppointmentSlots":
+          result = await handleFindAppointmentSlots(JSON.parse(fn.arguments), practice, vapiCallId);
           break;
-        case "schedule_appointment":
-          result = await handleScheduleAppointment(JSON.parse(fn.arguments), practice);
+        case "bookAppointment":
+          result = await handleBookAppointment(JSON.parse(fn.arguments), practice, vapiCallId);
           break;
         case "get_patient_appointments":
           result = await handleGetPatientAppointments(JSON.parse(fn.arguments), practice);
@@ -337,7 +343,7 @@ async function executeTools(toolCallList: any[], practice: any) {
       }
     } catch (error) {
       console.error(`Error executing tool ${fn.name}:`, error);
-      result = { error: `Failed to execute ${fn.name}: ${error}` };
+      result = { error: `Failed to execute ${fn.name}: ${error instanceof Error ? error.message : "Unknown error"}` };
     }
 
     results.push({
@@ -350,55 +356,260 @@ async function executeTools(toolCallList: any[], practice: any) {
   return results;
 }
 
-// Tool implementations (placeholder for now)
-async function handleIdentifyPatient(params: any, _practice: any) {
-  console.log("Identifying patient:", params);
-  // For now, return mock data
-  return {
-    success: true,
-    message: "Patient identification initiated",
-    data: {
-      patientId: "patient_123",
-      name: params.patientName || "Unknown Patient",
-      isNewPatient: !params.patientName,
-    },
-  };
+// Tool implementations with real NexHealth integration
+async function handleIdentifyPatient(params: any, practice: any) {
+  console.log("=== IDENTIFYING/REGISTERING PATIENT ===");
+  console.log("Parameters:", JSON.stringify(params, null, 2));
+  console.log("Practice config:", {
+    subdomain: practice.nexhealth_subdomain,
+    locationId: practice.nexhealth_location_id,
+    selectedProviders: practice.nexhealth_selected_provider_ids
+  });
+
+  try {
+    // Validate practice configuration
+    if (!practice.nexhealth_subdomain || !practice.nexhealth_location_id) {
+      return {
+        success: false,
+        error: "Practice NexHealth configuration is incomplete. Please contact support."
+      };
+    }
+
+    if (!practice.nexhealth_selected_provider_ids || practice.nexhealth_selected_provider_ids.length === 0) {
+      return {
+        success: false,
+        error: "No providers are configured for booking. Please contact the practice."
+      };
+    }
+
+    // Extract patient details from params
+    const { first_name, last_name, phone_number, date_of_birth, email, gender } = params;
+
+    if (!first_name || !last_name || !phone_number) {
+      return {
+        success: false,
+        error: "Patient name and phone number are required for registration."
+      };
+    }
+
+    // Use the first selected provider for new patient registration
+    const providerId = practice.nexhealth_selected_provider_ids[0];
+
+    // Create patient in NexHealth
+    const patientData = await createPatient(
+      practice.nexhealth_subdomain,
+      practice.nexhealth_location_id,
+      providerId,
+      {
+        first_name,
+        last_name,
+        phone_number,
+        date_of_birth,
+        email,
+        gender
+      }
+    );
+
+    console.log("✅ Patient created successfully:", patientData.id);
+
+    return {
+      success: true,
+      patient_id: patientData.id.toString(),
+      message: `Thank you ${first_name}! I've registered you as a new patient in our system.`
+    };
+
+  } catch (error) {
+    console.error("❌ Error creating patient:", error);
+    return {
+      success: false,
+      error: "I'm sorry, I couldn't register you in our system right now. Please try again or call the office directly."
+    };
+  }
 }
 
-async function handleCheckAvailability(params: any, _practice: any) {
-  console.log("Checking availability:", params);
-  // Mock availability data
-  return {
-    success: true,
-    message: "Availability found",
-    data: {
-      availableSlots: [
-        { date: "2024-02-15", time: "10:00 AM", available: true },
-        { date: "2024-02-15", time: "2:00 PM", available: true },
-        { date: "2024-02-16", time: "9:00 AM", available: true },
-      ],
-      serviceName: params.serviceName,
-    },
-  };
+async function handleFindAppointmentSlots(params: any, practice: any, _vapiCallId: string) {
+  console.log("=== FINDING APPOINTMENT SLOTS ===");
+  console.log("Parameters:", JSON.stringify(params, null, 2));
+
+  try {
+    // Validate practice configuration
+    if (!practice.nexhealth_subdomain || !practice.nexhealth_location_id) {
+      return {
+        success: false,
+        error: "Practice configuration is incomplete. Please contact support."
+      };
+    }
+
+    const { service_description, requested_date, search_type } = params;
+
+    // Map service description to NexHealth appointment type
+    const serviceMapping = await db.serviceMapping.findFirst({
+      where: {
+        practice_id: practice.id,
+        spoken_service_name: {
+          equals: service_description,
+          mode: 'insensitive'
+        }
+      }
+    });
+
+    if (!serviceMapping) {
+      return {
+        success: false,
+        error: `I'm sorry, I couldn't find a service called '${service_description}'. Can you describe it differently or choose from common services like cleaning or check-up?`
+      };
+    }
+
+    // Determine search parameters
+    const startDate = requested_date || new Date().toISOString().split('T')[0];
+    const searchDays = search_type === "specific_date" ? 1 : 30;
+
+    // Get appointment slots from NexHealth
+    const slotsData = await getAppointmentSlots(
+      practice.nexhealth_subdomain,
+      practice.nexhealth_location_id,
+      {
+        appointment_type_id: serviceMapping.nexhealth_appointment_type_id,
+        provider_ids: practice.nexhealth_selected_provider_ids,
+        operatory_ids: practice.nexhealth_default_operatory_ids.length > 0 ? practice.nexhealth_default_operatory_ids : undefined,
+        start_date: startDate,
+        days: searchDays
+      }
+    );
+
+    console.log("Slots response:", JSON.stringify(slotsData, null, 2));
+
+    if (!slotsData || !Array.isArray(slotsData) || slotsData.length === 0) {
+      return {
+        success: true,
+        available_slots: [],
+        message_to_patient: `I'm sorry, I don't see any openings for ${service_description} ${search_type === "specific_date" ? `on ${requested_date}` : "in the next month"}. Would you like to try another date?`
+      };
+    }
+
+    // Format slots for response
+    const formattedSlots = slotsData.slice(0, 5).map(slot => ({
+      time: slot.start_time,
+      provider_id: slot.provider_id,
+      operatory_id: slot.operatory_id,
+      end_time: slot.end_time
+    }));
+
+    const dateStr = search_type === "specific_date" ? `on ${requested_date}` : "coming up";
+    const slotDescriptions = formattedSlots.map(slot => {
+      const date = new Date(slot.time);
+      return date.toLocaleDateString() + " at " + date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+    }).join(", ");
+
+    return {
+      success: true,
+      available_slots: formattedSlots,
+      appointment_type_id_used: serviceMapping.nexhealth_appointment_type_id,
+      message_to_patient: `Great! For ${service_description} ${dateStr}, I have these times available: ${slotDescriptions}. Which time works best for you?`
+    };
+
+  } catch (error) {
+    console.error("❌ Error finding appointment slots:", error);
+    return {
+      success: false,
+      error: "I'm having trouble checking availability right now. Please try again or call the office directly."
+    };
+  }
 }
 
-async function handleScheduleAppointment(params: any, _practice: any) {
-  console.log("Scheduling appointment:", params);
-  // Mock appointment scheduling
-  return {
-    success: true,
-    message: "Appointment scheduled successfully",
-    data: {
-      appointmentId: "apt_" + Date.now(),
-      patientName: params.patientName,
-      service: params.serviceName,
-      date: params.appointmentDate,
-      time: params.appointmentTime,
-      confirmationNumber: "CONF" + Date.now().toString().slice(-6),
-    },
-  };
+async function handleBookAppointment(params: any, practice: any, _vapiCallId: string) {
+  console.log("=== BOOKING APPOINTMENT ===");
+  console.log("Parameters:", JSON.stringify(params, null, 2));
+
+  try {
+    // Validate practice configuration
+    if (!practice.nexhealth_subdomain || !practice.nexhealth_location_id) {
+      return {
+        success: false,
+        error: "Practice configuration is incomplete. Please contact support."
+      };
+    }
+
+    const {
+      patient_id,
+      provider_id,
+      operatory_id,
+      appointment_type_id,
+      start_time,
+      end_time,
+      note
+    } = params;
+
+    if (!patient_id || !provider_id || !appointment_type_id || !start_time || !end_time) {
+      return {
+        success: false,
+        error: "Missing required information for booking. Please try again."
+      };
+    }
+
+    // Book appointment in NexHealth
+    const appointmentData = await bookAppointment(
+      practice.nexhealth_subdomain,
+      practice.nexhealth_location_id,
+      {
+        patient_id,
+        provider_id,
+        operatory_id,
+        appointment_type_id,
+        start_time,
+        end_time,
+        note
+      }
+    );
+
+    console.log("✅ Appointment booked successfully:", appointmentData.id);
+
+    // Update call log with booking details
+    try {
+      await db.callLog.updateMany({
+        where: {
+          vapi_call_id: _vapiCallId,
+          practice_id: practice.id
+        },
+        data: {
+          booked_appointment_nexhealth_id: appointmentData.id.toString(),
+          booked_appointment_patient_id: patient_id,
+          booked_appointment_provider_id: provider_id,
+          booked_appointment_operatory_id: operatory_id,
+          booked_appointment_type_id: appointment_type_id,
+          booked_appointment_start_time: new Date(start_time),
+          booked_appointment_end_time: new Date(end_time),
+          booked_appointment_note: note,
+          call_status: "COMPLETED_BOOKING",
+          detected_intent: `booked_appointment_for_${appointment_type_id}`
+        }
+      });
+      console.log("✅ Call log updated with booking details");
+    } catch (dbError) {
+      console.error("❌ Error updating call log:", dbError);
+      // Continue with success response even if logging fails
+    }
+
+    const appointmentDate = new Date(start_time);
+    const dateStr = appointmentDate.toLocaleDateString();
+    const timeStr = appointmentDate.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+
+    return {
+      success: true,
+      appointment_id: appointmentData.id.toString(),
+      confirmation_message_to_patient: `Perfect! You're all set for ${dateStr} at ${timeStr}. Your appointment confirmation number is ${appointmentData.id}. We'll see you then!`
+    };
+
+  } catch (error) {
+    console.error("❌ Error booking appointment:", error);
+    return {
+      success: false,
+      error: "I'm sorry, I couldn't complete your booking right now. Please try again or call the office directly."
+    };
+  }
 }
 
+// Placeholder implementations for future tools
 async function handleGetPatientAppointments(params: any, _practice: any) {
   console.log("Getting patient appointments:", params);
   // Mock existing appointments
