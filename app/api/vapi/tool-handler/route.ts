@@ -364,6 +364,22 @@ async function executeTools(toolCallList: any[], practice: any, vapiCallId: stri
       }
 
       switch (fn.name) {
+        case "identify_patient":
+          result = await handleIdentifyPatient(parsedArguments, practice, vapiCallId);
+          break;
+        case "check_availability":
+          result = await handleFindAppointmentSlots(parsedArguments, practice, vapiCallId);
+          break;
+        case "schedule_appointment":
+          result = await handleBookAppointment(parsedArguments, practice, vapiCallId);
+          break;
+        case "get_patient_appointments":
+          result = await handleGetPatientAppointments(parsedArguments, practice);
+          break;
+        case "cancel_appointment":
+          result = await handleCancelAppointment(parsedArguments, practice);
+          break;
+        // Legacy tool names for backwards compatibility
         case "identifyOrRegisterPatient":
           result = await handleIdentifyPatient(parsedArguments, practice, vapiCallId);
           break;
@@ -372,12 +388,6 @@ async function executeTools(toolCallList: any[], practice: any, vapiCallId: stri
           break;
         case "bookAppointment":
           result = await handleBookAppointment(parsedArguments, practice, vapiCallId);
-          break;
-        case "get_patient_appointments":
-          result = await handleGetPatientAppointments(parsedArguments, practice);
-          break;
-        case "cancel_appointment":
-          result = await handleCancelAppointment(parsedArguments, practice);
           break;
         default:
           result = { error: `Unknown tool: ${fn.name}` };
