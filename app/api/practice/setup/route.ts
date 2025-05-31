@@ -52,6 +52,12 @@ export async function POST(request: NextRequest) {
       timezone,
     } = body;
 
+    // Convert ID arrays to strings
+    const providerIds = nexhealth_selected_provider_ids ? 
+      nexhealth_selected_provider_ids.map((id: any) => id.toString()) : [];
+    const operatoryIds = nexhealth_default_operatory_ids ? 
+      nexhealth_default_operatory_ids.map((id: any) => id.toString()) : [];
+
     // Upsert practice record
     const practice = await prisma.practice.upsert({
       where: { clerk_user_id: userId },
@@ -60,16 +66,16 @@ export async function POST(request: NextRequest) {
         name,
         nexhealth_subdomain,
         nexhealth_location_id,
-        nexhealth_selected_provider_ids: nexhealth_selected_provider_ids || [],
-        nexhealth_default_operatory_ids: nexhealth_default_operatory_ids || [],
+        nexhealth_selected_provider_ids: providerIds,
+        nexhealth_default_operatory_ids: operatoryIds,
         timezone,
       },
       update: {
         name,
         nexhealth_subdomain,
         nexhealth_location_id,
-        nexhealth_selected_provider_ids: nexhealth_selected_provider_ids || [],
-        nexhealth_default_operatory_ids: nexhealth_default_operatory_ids || [],
+        nexhealth_selected_provider_ids: providerIds,
+        nexhealth_default_operatory_ids: operatoryIds,
         timezone,
       },
     });
