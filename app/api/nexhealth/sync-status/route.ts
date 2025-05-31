@@ -1,7 +1,7 @@
 import { auth } from "@clerk/nextjs/server";
 import { NextResponse } from "next/server";
 import prisma from "@/lib/prisma";
-import { getAppointmentTypes } from "@/lib/nexhealth.server";
+import { getSyncStatus } from "@/lib/nexhealth.server";
 
 export async function GET() {
   try {
@@ -26,22 +26,16 @@ export async function GET() {
       );
     }
 
-    const appointmentTypes = await getAppointmentTypes(
+    const syncStatus = await getSyncStatus(
       practice.nexhealth_subdomain,
       practice.nexhealth_location_id
     );
 
-    // Convert IDs to strings for consistency
-    const normalizedAppointmentTypes = appointmentTypes.map((type: any) => ({
-      ...type,
-      id: type.id.toString()
-    }));
-
-    return NextResponse.json({ appointmentTypes: normalizedAppointmentTypes });
+    return NextResponse.json({ syncStatus });
   } catch (error) {
-    console.error("Error fetching appointment types:", error);
+    console.error("Error fetching sync status:", error);
     return NextResponse.json(
-      { error: "Failed to fetch appointment types from NexHealth" },
+      { error: "Failed to fetch sync status from NexHealth" },
       { status: 500 }
     );
   }

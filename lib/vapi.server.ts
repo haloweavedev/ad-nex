@@ -10,6 +10,54 @@ interface PracticeData {
   vapi_system_prompt_override: string | null;
   vapi_first_message: string | null;
   vapi_assistant_id: string | null;
+  timezone: string | null;
+}
+
+// Define proper Vapi API interfaces based on documentation
+interface VapiOpenAIModel {
+  provider: "openai";
+  model: string;
+  messages: Array<{
+    role: "system" | "user" | "assistant";
+    content: string;
+  }>;
+  tools: VapiTool[];
+}
+
+interface VapiPlayHTVoice {
+  provider: "playht";
+  voiceId: string;
+}
+
+interface VapiTool {
+  type: "function";
+  function: {
+    name: string;
+    description: string;
+    parameters: {
+      type: "object";
+      properties: Record<string, any>;
+      required: string[];
+    };
+  };
+}
+
+interface VapiServer {
+  url: string;
+  secret: string;
+}
+
+interface VapiAssistantPayload {
+  name: string;
+  model: VapiOpenAIModel;
+  voice: VapiPlayHTVoice;
+  firstMessage: string;
+  server: VapiServer;
+  clientMessages: string[];
+  serverMessages: string[];
+  recordingEnabled: boolean;
+  silenceTimeoutSeconds: number;
+  maxDurationSeconds: number;
 }
 
 // Base system prompt template with placeholders
@@ -130,7 +178,7 @@ export async function createOrUpdateVapiAssistant(
     // Personalize the system prompt
     const personalizedPrompt = BASE_SYSTEM_PROMPT
       .replace(/{PRACTICE_NAME}/g, practiceData.name || "the dental practice")
-      .replace(/{PRACTICE_TIMEZONE}/g, "America/New_York") // Could be from practice data
+      .replace(/{PRACTICE_TIMEZONE}/g, practiceData.timezone || "America/New_York")
       .replace(/{PRACTICE_CUSTOM_INSTRUCTIONS}/g, 
         practiceData.vapi_system_prompt_override || "");
 
@@ -201,8 +249,8 @@ export async function createOrUpdateVapiAssistant(
     // Initialize Vapi client
     const vapi = createVapiClient();
 
-    // Prepare assistant payload for Vapi API (cleaned up based on API errors)
-    const assistantPayload = {
+    // Prepare assistant payload for Vapi API with proper typing
+    const assistantPayload: VapiAssistantPayload = {
       name: `LAINE - ${practiceData.name || practiceData.id}`,
       model: {
         provider: "openai",
@@ -213,7 +261,7 @@ export async function createOrUpdateVapiAssistant(
             content: personalizedPrompt
           }
         ],
-        tools: tools
+        tools: tools as VapiTool[]
       },
       voice: {
         provider: "playht",
@@ -253,7 +301,7 @@ export async function createOrUpdateVapiAssistant(
       try {
         const updatedAssistant = await vapi.assistants.update(
           practiceData.vapi_assistant_id!,
-          assistantPayload as any
+          assistantPayload as any // Keep minimal 'as any' here due to SDK type limitations
         );
         assistantId = updatedAssistant.id;
         console.log("Vapi assistant updated successfully:", assistantId);

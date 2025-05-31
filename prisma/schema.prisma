@@ -32,6 +32,13 @@ model Practice {
 
   timezone String? @default("America/New_York") // e.g., "America/New_York"
 
+  // Webhook status tracking
+  webhook_status                  String?  @default("UNKNOWN") // "CONNECTED", "DISCONNECTED", "ERROR", "UNKNOWN"
+  webhook_last_attempt            DateTime? // Last time webhook subscription was attempted
+  webhook_last_success            DateTime? // Last successful webhook subscription
+  webhook_error_message           String? // Last error message if subscription failed
+  webhook_subscription_id         String? // NexHealth webhook subscription ID
+
   // Relationships
   service_mappings ServiceMapping[] @relation("PracticeServiceMappings")
   call_logs        CallLog[]        @relation("PracticeCallLogs")

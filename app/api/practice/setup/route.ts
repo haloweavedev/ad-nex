@@ -2,6 +2,7 @@ import { auth } from "@clerk/nextjs/server";
 import { NextRequest, NextResponse } from "next/server";
 import prisma from "@/lib/prisma";
 import { createOrUpdateVapiAssistant } from "@/lib/vapi.server";
+import { subscribePracticeToWebhooks } from "@/lib/nexhealth-webhook.server";
 
 export async function GET() {
   try {
@@ -96,6 +97,49 @@ export async function POST(request: NextRequest) {
       // Continue with the response even if Vapi assistant creation fails
     }
 
+    // 🔗 Automatically setup webhook subscription for SaaS
+    let webhookSetupResult = null;
+    if (nexhealth_subdomain) {
+      try {
+        console.log(`Setting up webhook subscription for practice: ${name} (${nexhealth_subdomain})`);
+        
+        const webhookResult = await subscribePracticeToWebhooks(nexhealth_subdomain);
+        webhookSetupResult = webhookResult;
+
+        // Update practice with webhook status
+        await prisma.practice.update({
+          where: { id: practice.id },
+          data: {
+            webhook_status: webhookResult.status,
+            webhook_last_attempt: new Date(),
+            webhook_last_success: webhookResult.success ? new Date() : undefined,
+            webhook_error_message: webhookResult.success ? null : webhookResult.message,
+            webhook_subscription_id: webhookResult.subscriptionId || null,
+          },
+        });
+
+        console.log(`✅ Webhook subscription setup successful for ${name}`);
+      } catch (webhookError) {
+        console.warn(`⚠️ Webhook subscription setup failed for ${name}:`, webhookError);
+        
+        // Update practice with error status
+        await prisma.practice.update({
+          where: { id: practice.id },
+          data: {
+            webhook_status: "ERROR",
+            webhook_last_attempt: new Date(),
+            webhook_error_message: webhookError instanceof Error ? webhookError.message : 'Failed to setup webhook subscription',
+          },
+        });
+
+        webhookSetupResult = { 
+          success: false,
+          status: "ERROR",
+          error: webhookError instanceof Error ? webhookError.message : 'Failed to setup webhook subscription' 
+        };
+      }
+    }
+
     return NextResponse.json({ 
       success: true, 
       practice: {
@@ -106,7 +150,8 @@ export async function POST(request: NextRequest) {
         nexhealth_selected_provider_ids: practice.nexhealth_selected_provider_ids,
         nexhealth_default_operatory_ids: practice.nexhealth_default_operatory_ids,
         timezone: practice.timezone,
-      }
+      },
+      webhook: webhookSetupResult // Include webhook setup result
     });
   } catch (error) {
     console.error("Error saving practice:", error);

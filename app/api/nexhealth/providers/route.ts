@@ -31,7 +31,13 @@ export async function GET() {
       practice.nexhealth_location_id
     );
 
-    return NextResponse.json({ providers });
+    // Convert IDs to strings for consistency
+    const normalizedProviders = providers.map((provider: any) => ({
+      ...provider,
+      id: provider.id.toString()
+    }));
+
+    return NextResponse.json({ providers: normalizedProviders });
   } catch (error) {
     console.error("Error fetching providers:", error);
     return NextResponse.json(

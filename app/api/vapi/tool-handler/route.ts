@@ -4,8 +4,14 @@ import db from "@/lib/prisma";
 import { 
   createPatient, 
   getAppointmentSlots, 
-  bookAppointment
+  bookAppointment,
+  searchPatients
 } from "@/lib/nexhealth.server";
+
+// Tool response type
+interface ToolResponse {
+  result: string;
+}
 
 // GET method for health check and connectivity testing
 export async function GET() {
@@ -322,21 +328,43 @@ async function executeTools(toolCallList: any[], practice: any, vapiCallId: stri
     let result;
 
     try {
+      console.log("=== TOOL EXECUTION DEBUG ===");
+      console.log("Tool Call ID:", id);
+      console.log("Function Name:", fn.name);
+      console.log("Arguments type:", typeof fn.arguments);
+      console.log("Arguments value:", fn.arguments);
+      console.log("Arguments JSON string?:", typeof fn.arguments === 'string');
+      
+      // Parse arguments only if they are a string, otherwise use as-is
+      let parsedArguments;
+      if (typeof fn.arguments === 'string') {
+        try {
+          parsedArguments = JSON.parse(fn.arguments);
+          console.log("✅ Successfully parsed arguments from string:", parsedArguments);
+        } catch (parseError) {
+          console.error("❌ Failed to parse arguments string:", parseError);
+          throw new Error(`Invalid JSON in arguments: ${parseError instanceof Error ? parseError.message : 'Unknown parse error'}`);
+        }
+      } else {
+        parsedArguments = fn.arguments;
+        console.log("✅ Using arguments as-is (already an object):", parsedArguments);
+      }
+
       switch (fn.name) {
         case "identifyOrRegisterPatient":
-          result = await handleIdentifyPatient(JSON.parse(fn.arguments), practice);
+          result = await handleIdentifyPatient(parsedArguments, practice, vapiCallId);
           break;
         case "findAppointmentSlots":
-          result = await handleFindAppointmentSlots(JSON.parse(fn.arguments), practice, vapiCallId);
+          result = await handleFindAppointmentSlots(parsedArguments, practice, vapiCallId);
           break;
         case "bookAppointment":
-          result = await handleBookAppointment(JSON.parse(fn.arguments), practice, vapiCallId);
+          result = await handleBookAppointment(parsedArguments, practice, vapiCallId);
           break;
         case "get_patient_appointments":
-          result = await handleGetPatientAppointments(JSON.parse(fn.arguments), practice);
+          result = await handleGetPatientAppointments(parsedArguments, practice);
           break;
         case "cancel_appointment":
-          result = await handleCancelAppointment(JSON.parse(fn.arguments), practice);
+          result = await handleCancelAppointment(parsedArguments, practice);
           break;
         default:
           result = { error: `Unknown tool: ${fn.name}` };
@@ -356,73 +384,145 @@ async function executeTools(toolCallList: any[], practice: any, vapiCallId: stri
   return results;
 }
 
-// Tool implementations with real NexHealth integration
-async function handleIdentifyPatient(params: any, practice: any) {
-  console.log("=== IDENTIFYING/REGISTERING PATIENT ===");
-  console.log("Parameters:", JSON.stringify(params, null, 2));
-  console.log("Practice config:", {
-    subdomain: practice.nexhealth_subdomain,
-    locationId: practice.nexhealth_location_id,
-    selectedProviders: practice.nexhealth_selected_provider_ids
-  });
-
+/**
+ * Identify and register a patient in NexHealth
+ */
+async function handleIdentifyPatient(params: any, practice: any, vapiCallId: string): Promise<ToolResponse> {
   try {
-    // Validate practice configuration
-    if (!practice.nexhealth_subdomain || !practice.nexhealth_location_id) {
+    console.log("=== IDENTIFYING/REGISTERING PATIENT ===");
+    console.log("Parameters:", JSON.stringify(params, null, 2));
+    console.log("Practice config:", {
+      subdomain: practice.nexhealth_subdomain,
+      locationId: practice.nexhealth_location_id,
+      selectedProviders: practice.nexhealth_selected_provider_ids
+    });
+
+    // Extract patient information from the call
+    const firstName = params.first_name as string;
+    const lastName = params.last_name as string;
+    const phoneNumber = params.phone_number as string;
+    const dateOfBirth = params.date_of_birth as string; // YYYY-MM-DD format
+    const email = params.email as string;
+    const gender = params.gender as string; // "Male", "Female", or "Other"
+
+    if (!firstName || !lastName || !phoneNumber) {
       return {
-        success: false,
-        error: "Practice NexHealth configuration is incomplete. Please contact support."
+        result: "I need at least your first name, last name, and phone number to proceed. Could you please provide those details?"
       };
     }
 
-    if (!practice.nexhealth_selected_provider_ids || practice.nexhealth_selected_provider_ids.length === 0) {
-      return {
-        success: false,
-        error: "No providers are configured for booking. Please contact the practice."
-      };
-    }
+    // Step 1: Search for existing patient first
+    let patient = null;
+    try {
+      console.log("Searching for existing patient...");
+      const searchResults = await searchPatients(
+        practice.nexhealth_subdomain!,
+        practice.nexhealth_location_id!,
+        {
+          first_name: firstName,
+          last_name: lastName,
+          phone_number: phoneNumber,
+          date_of_birth: dateOfBirth,
+        }
+      );
 
-    // Extract patient details from params
-    const { first_name, last_name, phone_number, date_of_birth, email, gender } = params;
+      // Check if we found a matching patient
+      if (searchResults && searchResults.length > 0) {
+        // Look for an exact match on name and phone
+        patient = searchResults.find((p: any) => 
+          p.first_name?.toLowerCase() === firstName.toLowerCase() &&
+          p.last_name?.toLowerCase() === lastName.toLowerCase() &&
+          p.phone_number === phoneNumber
+        );
 
-    if (!first_name || !last_name || !phone_number) {
-      return {
-        success: false,
-        error: "Patient name and phone number are required for registration."
-      };
-    }
+        if (patient) {
+          console.log("Found existing patient:", patient.id);
+          
+          // Store patient information in call log
+          try {
+            await db.callLog.updateMany({
+              where: {
+                vapi_call_id: vapiCallId,
+                practice_id: practice.id
+              },
+              data: {
+                nexhealth_patient_id: patient.id.toString(),
+                detected_intent: "existing_patient_identified"
+              }
+            });
+          } catch (dbError) {
+            console.error("Error updating call log for existing patient:", dbError);
+          }
 
-    // Use the first selected provider for new patient registration
-    const providerId = practice.nexhealth_selected_provider_ids[0];
-
-    // Create patient in NexHealth
-    const patientData = await createPatient(
-      practice.nexhealth_subdomain,
-      practice.nexhealth_location_id,
-      providerId,
-      {
-        first_name,
-        last_name,
-        phone_number,
-        date_of_birth,
-        email,
-        gender
+          return {
+            result: `Welcome back, ${firstName}! I found your existing record in our system. How can I help you today?`
+          };
+        }
       }
-    );
+    } catch (searchError) {
+      console.log("Patient search failed or returned no results, proceeding to create new patient:", searchError);
+    }
 
-    console.log("✅ Patient created successfully:", patientData.id);
+    // Step 2: Create new patient if not found
+    if (!patient) {
+      console.log("Creating new patient in NexHealth...");
+
+      // Get the first selected provider for patient registration
+      if (!practice.nexhealth_selected_provider_ids || practice.nexhealth_selected_provider_ids.length === 0) {
+        return {
+          result: "I apologize, but our system isn't properly configured for new patient registration right now. Please call our office directly and a staff member will help you schedule an appointment."
+        };
+      }
+
+      const providerId = practice.nexhealth_selected_provider_ids[0];
+
+      const patientData = {
+        first_name: firstName,
+        last_name: lastName,
+        phone_number: phoneNumber,
+        date_of_birth: dateOfBirth,
+        email: email,
+        gender: gender
+      };
+
+      const newPatient = await createPatient(
+        practice.nexhealth_subdomain!,
+        practice.nexhealth_location_id!,
+        providerId,
+        patientData
+      );
+
+      console.log("New patient created:", newPatient);
+
+      // Store patient information in call log
+      try {
+        await db.callLog.updateMany({
+          where: {
+            vapi_call_id: vapiCallId,
+            practice_id: practice.id
+          },
+          data: {
+            nexhealth_patient_id: newPatient.user?.id?.toString() || newPatient.id?.toString(),
+            detected_intent: "new_patient_created"
+          }
+        });
+      } catch (dbError) {
+        console.error("Error updating call log for new patient:", dbError);
+      }
+
+      return {
+        result: `Perfect! I've created your patient record, ${firstName}. Welcome to our practice! Now, what type of appointment would you like to schedule?`
+      };
+    }
 
     return {
-      success: true,
-      patient_id: patientData.id.toString(),
-      message: `Thank you ${first_name}! I've registered you as a new patient in our system.`
+      result: "I encountered an issue while setting up your patient record. Let me have a staff member call you back to help with scheduling."
     };
 
   } catch (error) {
-    console.error("❌ Error creating patient:", error);
+    console.error("Error in handleIdentifyPatient:", error);
     return {
-      success: false,
-      error: "I'm sorry, I couldn't register you in our system right now. Please try again or call the office directly."
+      result: "I'm having trouble accessing our patient system right now. Let me have someone from our office call you back to help with your appointment."
     };
   }
 }

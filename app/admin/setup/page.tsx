@@ -36,15 +36,24 @@ interface AppointmentType {
   duration?: number;
 }
 
+interface LocationDetails {
+  id: string;
+  name: string;
+  requires_operatory: boolean;
+}
+
 interface ServiceMapping {
   id: string;
   spoken_service_name: string;
   nexhealth_appointment_type_id: string;
-  default_duration_minutes?: number;
 }
 
-interface LocationDetails {
-  map_by_operatory: boolean;
+interface WebhookStatus {
+  status: string;
+  message: string;
+  canRetry: boolean;
+  lastAttempt?: string;
+  lastSuccess?: string;
 }
 
 export default function SetupPage() {
@@ -77,6 +86,10 @@ export default function SetupPage() {
   const [selectedAppointmentTypeId, setSelectedAppointmentTypeId] = useState("");
   const [serviceMappingLoading, setServiceMappingLoading] = useState(false);
 
+  // Webhook status
+  const [webhookStatus, setWebhookStatus] = useState<WebhookStatus | null>(null);
+  const [webhookLoading, setWebhookLoading] = useState(false);
+
   // Fetch existing practice data on load
   useEffect(() => {
     const fetchPracticeData = async () => {
@@ -93,6 +106,8 @@ export default function SetupPage() {
               nexhealth_default_operatory_ids: data.practice.nexhealth_default_operatory_ids || [],
               timezone: data.practice.timezone || "America/New_York",
             });
+            // Also fetch webhook status after practice data loads
+            await fetchWebhookStatus();
           }
         }
       } catch (error) {
@@ -138,6 +153,8 @@ export default function SetupPage() {
 
       if (response.ok) {
         toast.success("Practice settings saved successfully");
+        // Refresh webhook status after successful save
+        await fetchWebhookStatus();
       } else {
         throw new Error("Failed to save practice settings");
       }
@@ -306,6 +323,45 @@ export default function SetupPage() {
     }
   };
 
+  // Webhook status functions
+  const fetchWebhookStatus = async () => {
+    try {
+      const response = await fetch("/api/practice/webhook-status");
+      if (response.ok) {
+        const data = await response.json();
+        setWebhookStatus(data.webhook || null);
+      } else {
+        console.error("Failed to fetch webhook status");
+      }
+    } catch (error) {
+      console.error("Error fetching webhook status:", error);
+    }
+  };
+
+  const retryWebhookConnection = async () => {
+    setWebhookLoading(true);
+    try {
+      const response = await fetch("/api/practice/webhook-setup", {
+        method: "POST",
+      });
+
+      const data = await response.json();
+      
+      if (data.success) {
+        toast.success(data.message || "Webhook connected successfully");
+        // Refresh webhook status
+        await fetchWebhookStatus();
+      } else {
+        toast.error(data.message || "Failed to connect webhook");
+      }
+    } catch (error) {
+      console.error("Error retrying webhook connection:", error);
+      toast.error("Failed to connect webhook. Please try again.");
+    } finally {
+      setWebhookLoading(false);
+    }
+  };
+
   if (initialLoading) {
     return <div>Loading...</div>;
   }
@@ -388,6 +444,53 @@ export default function SetupPage() {
         </CardContent>
       </Card>
 
+      {/* Webhook Status */}
+      {formData.nexhealth_subdomain && (
+        <Card>
+          <CardHeader>
+            <CardTitle>📡 Webhook Connection</CardTitle>
+            <CardDescription>
+              Webhook status for appointment sync to EHR
+            </CardDescription>
+          </CardHeader>
+          <CardContent className="space-y-4">
+            {webhookStatus ? (
+              <div className="space-y-3">
+                <div className="p-4 bg-muted rounded-lg">
+                  <p className="font-medium">{webhookStatus.message}</p>
+                  {webhookStatus.lastSuccess && (
+                    <p className="text-sm text-muted-foreground mt-1">
+                      Last successful connection: {new Date(webhookStatus.lastSuccess).toLocaleString()}
+                    </p>
+                  )}
+                  {webhookStatus.lastAttempt && webhookStatus.status === "ERROR" && (
+                    <p className="text-sm text-muted-foreground mt-1">
+                      Last attempt: {new Date(webhookStatus.lastAttempt).toLocaleString()}
+                    </p>
+                  )}
+                </div>
+                
+                {webhookStatus.canRetry && (
+                  <Button 
+                    onClick={retryWebhookConnection} 
+                    disabled={webhookLoading || webhookStatus.status === "CONNECTING"}
+                    variant={webhookStatus.status === "CONNECTED" ? "outline" : "default"}
+                  >
+                    {webhookLoading ? "⏳ Connecting..." : "🔄 Re-sync Webhook"}
+                  </Button>
+                )}
+              </div>
+            ) : (
+              <div className="space-y-3">
+                <div className="p-4 bg-muted rounded-lg">
+                  <p className="text-muted-foreground">Loading webhook status...</p>
+                </div>
+              </div>
+            )}
+          </CardContent>
+        </Card>
+      )}
+
       {/* Provider Selection */}
       {formData.nexhealth_subdomain && formData.nexhealth_location_id && (
         <Card>
@@ -454,10 +557,10 @@ export default function SetupPage() {
             {locationDetails && (
               <div className="space-y-4">
                 <div className="p-4 bg-muted rounded-lg">
-                  <p><strong>Maps by Operatory:</strong> {locationDetails.map_by_operatory ? "Yes" : "No"}</p>
+                  <p><strong>Maps by Operatory:</strong> {locationDetails.requires_operatory ? "Yes" : "No"}</p>
                 </div>
                 
-                {locationDetails.map_by_operatory && (
+                {locationDetails.requires_operatory && (
                   <div className="space-y-4">
                     <Button onClick={fetchOperatories} disabled={operatoriesLoading}>
                       {operatoriesLoading ? "Fetching..." : "Fetch Operatories"}

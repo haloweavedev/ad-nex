@@ -35,11 +35,14 @@ export default function TestCallButton({ assistantId, vapiPublicKey }: TestCallB
   useEffect(() => {
     if (!vapiPublicKey) return;
 
+    let currentVapiInstance: any = null;
+
     const initVapi = async () => {
       try {
         // Dynamic import to avoid SSR issues
         const { default: Vapi } = await import("@vapi-ai/web");
         const vapi = new Vapi(vapiPublicKey);
+        currentVapiInstance = vapi;
         setVapiInstance(vapi);
 
         // Set up event listeners
@@ -123,8 +126,8 @@ export default function TestCallButton({ assistantId, vapiPublicKey }: TestCallB
     initVapi();
 
     return () => {
-      if (vapiInstance) {
-        vapiInstance.removeAllListeners();
+      if (currentVapiInstance) {
+        currentVapiInstance.removeAllListeners();
       }
     };
   }, [vapiPublicKey]);

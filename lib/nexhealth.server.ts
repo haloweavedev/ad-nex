@@ -149,9 +149,18 @@ export async function createPatient(
   }
 ): Promise<any> {
   const data = {
-    patient: {
-      ...patientDetails,
+    provider: {
       provider_id: providerId,
+    },
+    patient: {
+      first_name: patientDetails.first_name,
+      last_name: patientDetails.last_name,
+      email: patientDetails.email,
+      bio: {
+        date_of_birth: patientDetails.date_of_birth,
+        phone_number: patientDetails.phone_number,
+        gender: patientDetails.gender,
+      },
     },
   };
 
@@ -221,19 +230,22 @@ export async function getAppointmentSlots(
     additionalParams.days = params.days.toString();
   }
 
+  // Add location ID as lids[] parameter
+  additionalParams["lids[]"] = locationId;
+
   if (params.provider_ids && params.provider_ids.length > 0) {
-    params.provider_ids.forEach((id, index) => {
-      additionalParams[`pids[${index}]`] = id;
+    params.provider_ids.forEach((id) => {
+      additionalParams[`pids[]`] = id; // Use pids[] format
     });
   }
 
   if (params.operatory_ids && params.operatory_ids.length > 0) {
-    params.operatory_ids.forEach((id, index) => {
-      additionalParams[`operatory_ids[${index}]`] = id;
+    params.operatory_ids.forEach((id) => {
+      additionalParams[`operatory_ids[]`] = id; // Use operatory_ids[] format
     });
   }
 
-  return nexHealthRequest("GET", "/appointment_slots", subdomain, locationId, undefined, additionalParams);
+  return nexHealthRequest("GET", "/appointment_slots", subdomain, undefined, undefined, additionalParams);
 }
 
 /**
@@ -253,7 +265,7 @@ export async function bookAppointment(
   }
 ): Promise<any> {
   const data = {
-    appointment: appointmentDetails,
+    appt: appointmentDetails,
   };
 
   return nexHealthRequest("POST", "/appointments", subdomain, locationId, data);
@@ -293,4 +305,45 @@ export async function getPatientById(
   patientId: string
 ): Promise<any> {
   return nexHealthRequest("GET", `/patients/${patientId}`, subdomain, locationId);
+}
+
+/**
+ * Create manual provider availability
+ */
+export async function createAvailability(
+  subdomain: string,
+  locationId: string,
+  availabilityData: {
+    specific_date: string; // YYYY-MM-DD format
+    appointment_type_ids: string[];
+    provider_id: string;
+    operatory_id?: string;
+    begin_time: string; // HH:MM format
+    end_time: string; // HH:MM format
+    active?: boolean;
+  }
+): Promise<any> {
+  const data = {
+    availability: {
+      specific_date: availabilityData.specific_date,
+      appointment_type_ids: availabilityData.appointment_type_ids,
+      active: availabilityData.active !== false, // Default to true
+      provider_id: availabilityData.provider_id,
+      operatory_id: availabilityData.operatory_id,
+      begin_time: availabilityData.begin_time,
+      end_time: availabilityData.end_time,
+    },
+  };
+
+  return nexHealthRequest("POST", "/availabilities", subdomain, locationId, data);
+}
+
+/**
+ * Check EHR sync status
+ */
+export async function getSyncStatus(
+  subdomain: string,
+  locationId: string
+): Promise<any> {
+  return nexHealthRequest("GET", "/sync_status", subdomain, locationId);
 } 
