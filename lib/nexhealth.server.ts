@@ -12,8 +12,8 @@ let tokenCache: TokenCache | null = null;
 async function getNexHealthBearerToken(): Promise<string> {
   const now = Date.now();
   
-  // Return cached token if still valid (with 5 minute buffer)
-  if (tokenCache && tokenCache.expires > now + 5 * 60 * 1000) {
+  // Return cached token if still valid
+  if (tokenCache && tokenCache.expires > now) {
     console.log("Using cached NexHealth token");
     return tokenCache.token;
   }
@@ -29,12 +29,9 @@ async function getNexHealthBearerToken(): Promise<string> {
     const response = await fetch("https://nexhealth.info/authenticates", {
       method: "POST",
       headers: {
-        "Content-Type": "application/json",
         "Accept": "application/vnd.Nexhealth+json;version=2",
+        "Authorization": apiKey,
       },
-      body: JSON.stringify({
-        api_key: apiKey,
-      }),
     });
 
     if (!response.ok) {
@@ -44,11 +41,12 @@ async function getNexHealthBearerToken(): Promise<string> {
     const authData = await response.json();
     
     if (!authData.code) {
-      throw new Error(`NexHealth authentication failed: ${authData.message || "Unknown error"}`);
+      throw new Error(`NexHealth authentication failed: ${authData.description || "Unknown error"}`);
     }
 
-    const token = authData.data.access_token;
-    const expiresIn = authData.data.expires_in || 3600; // Default to 1 hour
+    const token = authData.data.token;
+    // NexHealth tokens expire in 1 hour (3600 seconds) based on the JWT structure
+    const expiresIn = 3600;
     
     // Cache the token (expires in seconds, convert to milliseconds and subtract buffer)
     tokenCache = {
