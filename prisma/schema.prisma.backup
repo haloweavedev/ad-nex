@@ -1,0 +1,96 @@
+// This is your Prisma schema file,
+// learn more about it in the docs: https://pris.ly/d/prisma-schema
+
+// Looking for ways to speed up your queries, or scale easily with your serverless or edge functions?
+// Try Prisma Accelerate: https://pris.ly/cli/accelerate-init
+
+generator client {
+  provider      = "prisma-client-js"
+  binaryTargets = ["native", "rhel-openssl-3.0.x"]
+}
+
+datasource db {
+  provider  = "postgresql"
+  // These will be set via .env file from Supabase project settings
+  url       = env("DATABASE_URL")
+  directUrl = env("DIRECT_URL") // Important for migrations with connection pooling
+}
+
+model Practice {
+  id                              String   @id @default(uuid())
+  clerk_user_id                   String   @unique // Links this practice to a Clerk user ID
+  name                            String? // e.g., "Sunshine Dental"
+  nexhealth_subdomain             String? // For NexHealth API calls
+  nexhealth_location_id           String? // Primary location ID for scheduling
+  nexhealth_selected_provider_ids String[] @default([]) // Selected provider IDs for booking
+  nexhealth_default_operatory_ids String[] @default([]) // Default operatory IDs if location maps by operatory
+  vapi_assistant_id               String? // Vapi Assistant ID if pre-configured
+  vapi_phone_number_id            String? // Vapi phone number associated with this practice
+  vapi_voice_id                   String? // Selected Vapi voice (e.g., "jennifer")
+  vapi_system_prompt_override     String?  @db.Text // Custom parts of Vapi system prompt
+  vapi_first_message              String?  @db.Text // Assistant's initial greeting
+
+  timezone String? @default("America/New_York") // e.g., "America/New_York"
+
+  // Webhook status tracking
+  webhook_status                  String?  @default("UNKNOWN") // "CONNECTED", "DISCONNECTED", "ERROR", "UNKNOWN"
+  webhook_last_attempt            DateTime? // Last time webhook subscription was attempted
+  webhook_last_success            DateTime? // Last successful webhook subscription
+  webhook_error_message           String? // Last error message if subscription failed
+  webhook_subscription_id         String? // NexHealth webhook subscription ID
+
+  // Relationships
+  service_mappings ServiceMapping[] @relation("PracticeServiceMappings")
+  call_logs        CallLog[]        @relation("PracticeCallLogs")
+
+  created_at DateTime @default(now())
+  updated_at DateTime @updatedAt
+}
+
+model ServiceMapping {
+  id                            String   @id @default(uuid())
+  practice_id                   String
+  practice                      Practice @relation("PracticeServiceMappings", fields: [practice_id], references: [id], onDelete: Cascade)
+  spoken_service_name           String // e.g., "cleaning", "check-up"
+  nexhealth_appointment_type_id String // NexHealth appointment_type_id
+  default_duration_minutes      Int?
+  is_active                     Boolean  @default(true)
+  created_at                    DateTime @default(now())
+  updated_at                    DateTime @updatedAt
+
+  @@unique([practice_id, spoken_service_name])
+  @@index([practice_id])
+}
+
+model CallLog {
+  id                       String    @id @default(uuid())
+  practice_id              String
+  practice                 Practice  @relation("PracticeCallLogs", fields: [practice_id], references: [id], onDelete: Cascade)
+  vapi_call_id             String    @unique // From Vapi
+  call_timestamp_start     DateTime
+  call_timestamp_end       DateTime?
+  patient_phone_number     String? // Consider PII implications
+  call_status              String? // e.g., INITIATED, COMPLETED_SUCCESS, FAILED
+  detected_intent          String?
+  nexhealth_patient_id     String?
+  nexhealth_appointment_id String?
+
+  // Booking outcome tracking  
+  booked_appointment_nexhealth_id   String?
+  ehr_appointment_foreign_id        String?  // EHR's native appointment ID from webhook
+  booked_appointment_patient_id     String?
+  booked_appointment_provider_id    String?
+  booked_appointment_operatory_id   String?
+  booked_appointment_type_id        String?
+  booked_appointment_start_time     DateTime?
+  booked_appointment_end_time       DateTime?
+  booked_appointment_note           String?
+
+  transcript_text     String?  @db.Text
+  summary             String?  @db.Text
+  vapi_transcript_url String?
+  created_at          DateTime @default(now())
+
+  @@index([practice_id])
+  @@index([vapi_call_id])
+}
