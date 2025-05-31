@@ -291,11 +291,6 @@ export default function AIConfigPage() {
         </Card>
 
         <div className="space-y-6">
-          <TestCallButton
-            assistantId={practiceData?.vapi_assistant_id || null}
-            vapiPublicKey={process.env.NEXT_PUBLIC_VAPI_PUBLIC_KEY}
-          />
-          
           {practiceData && (
             <Card>
               <CardHeader>
@@ -324,6 +319,32 @@ export default function AIConfigPage() {
                   <span className="text-sm">
                     {practiceData.vapi_system_prompt_override ? "Yes" : "No"}
                   </span>
+                </div>
+              </CardContent>
+            </Card>
+          )}
+
+          {/* Setup Guide Card */}
+          {!practiceData?.vapi_assistant_id && (
+            <Card>
+              <CardHeader>
+                <CardTitle>🚀 Getting Started</CardTitle>
+                <CardDescription>Follow these steps to activate your AI assistant</CardDescription>
+              </CardHeader>
+              <CardContent className="space-y-3">
+                <div className="space-y-2 text-sm">
+                  <div className="flex items-center gap-2">
+                    <span className="w-5 h-5 bg-blue-500 text-white rounded-full flex items-center justify-center text-xs">1</span>
+                    <span>Configure your voice and messages above</span>
+                  </div>
+                  <div className="flex items-center gap-2">
+                    <span className="w-5 h-5 bg-blue-500 text-white rounded-full flex items-center justify-center text-xs">2</span>
+                    <span>Click "Save AI Configuration" to create your assistant</span>
+                  </div>
+                  <div className="flex items-center gap-2">
+                    <span className="w-5 h-5 bg-gray-300 text-white rounded-full flex items-center justify-center text-xs">3</span>
+                    <span className="text-muted-foreground">Test your assistant (available after setup)</span>
+                  </div>
                 </div>
               </CardContent>
             </Card>
@@ -429,26 +450,28 @@ export default function AIConfigPage() {
 
             {/* Test Call Button with Validation */}
             <div className="pt-4 border-t">
-              <div className="flex items-center justify-between">
+              <div className="space-y-3">
                 <div>
-                  <p className="text-sm font-medium">Test Call Readiness</p>
+                  <p className="text-sm font-medium">🧪 Test Your AI Assistant</p>
                   <p className="text-xs text-muted-foreground">
                     {canTestCall 
-                      ? "All required tools are configured" 
-                      : "Please fix tool configuration before testing"
+                      ? "All required tools are configured. Ready to test!" 
+                      : "Please fix tool configuration issues before testing calls"
                     }
                   </p>
                 </div>
-                {canTestCall ? (
-                  <TestCallButton
-                    assistantId={practiceData?.vapi_assistant_id || null}
-                    vapiPublicKey={process.env.NEXT_PUBLIC_VAPI_PUBLIC_KEY}
-                  />
-                ) : (
-                  <Button disabled variant="outline" size="sm">
-                    Fix Tools First
-                  </Button>
-                )}
+                <div className="flex items-center justify-center">
+                  {canTestCall ? (
+                    <TestCallButton
+                      assistantId={practiceData?.vapi_assistant_id || null}
+                      vapiPublicKey={process.env.NEXT_PUBLIC_VAPI_PUBLIC_KEY}
+                    />
+                  ) : (
+                    <Button disabled variant="outline" size="sm">
+                      Fix Tools Configuration First
+                    </Button>
+                  )}
+                </div>
               </div>
             </div>
           </CardContent>

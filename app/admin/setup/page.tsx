@@ -86,6 +86,11 @@ export default function SetupPage() {
   const [selectedAppointmentTypeId, setSelectedAppointmentTypeId] = useState("");
   const [serviceMappingLoading, setServiceMappingLoading] = useState(false);
 
+  // New appointment type creation
+  const [newApptTypeName, setNewApptTypeName] = useState("");
+  const [newApptTypeDuration, setNewApptTypeDuration] = useState(30);
+  const [newApptTypeLoading, setNewApptTypeLoading] = useState(false);
+
   // Webhook status
   const [webhookStatus, setWebhookStatus] = useState<WebhookStatus | null>(null);
   const [webhookLoading, setWebhookLoading] = useState(false);
@@ -320,6 +325,40 @@ export default function SetupPage() {
     } catch (error) {
       console.error("Error deleting service mapping:", error);
       toast.error("Failed to delete service mapping");
+    }
+  };
+
+  const handleCreateNexHealthApptType = async () => {
+    if (!newApptTypeName || newApptTypeDuration <= 0) {
+      toast.error("Please provide a valid name and duration.");
+      return;
+    }
+    setNewApptTypeLoading(true);
+    try {
+      const response = await fetch("/api/nexhealth/appointment-types", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          name: newApptTypeName,
+          minutes: newApptTypeDuration,
+          bookable_online: true,
+        }),
+      });
+      const result = await response.json();
+      if (response.ok && result.data?.id) {
+        toast.success(`Appointment type "${result.data.name}" created in NexHealth with ID: ${result.data.id}`);
+        // Refresh the list of appointment types to include the new one
+        await fetchAppointmentTypes();
+        setNewApptTypeName("");
+        setNewApptTypeDuration(30);
+      } else {
+        throw new Error(result.error || "Failed to create NexHealth appointment type");
+      }
+    } catch (error) {
+      console.error("Error creating NexHealth appointment type:", error);
+      toast.error(error instanceof Error ? error.message : "Creation failed");
+    } finally {
+      setNewApptTypeLoading(false);
     }
   };
 
@@ -601,6 +640,41 @@ export default function SetupPage() {
                 )}
               </div>
             )}
+          </CardContent>
+        </Card>
+      )}
+
+      {/* Service Mapping */}
+      {formData.nexhealth_subdomain && formData.nexhealth_location_id && (
+        <Card>
+          <CardHeader>
+            <CardTitle>Create Custom NexHealth Appointment Type</CardTitle>
+            <CardDescription>
+              Create new appointment types directly in NexHealth for LAINE to use
+            </CardDescription>
+          </CardHeader>
+          <CardContent className="space-y-4">
+            <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+              <Input
+                placeholder="Appointment Type Name (e.g., 'LAINE Quick Checkup')"
+                value={newApptTypeName}
+                onChange={(e) => setNewApptTypeName(e.target.value)}
+              />
+              <Input
+                type="number"
+                placeholder="Duration (minutes)"
+                value={newApptTypeDuration}
+                onChange={(e) => setNewApptTypeDuration(parseInt(e.target.value) || 0)}
+                min="1"
+                max="480"
+              />
+              <Button onClick={handleCreateNexHealthApptType} disabled={newApptTypeLoading}>
+                {newApptTypeLoading ? "Creating..." : "Create in NexHealth"}
+              </Button>
+            </div>
+            <p className="text-sm text-muted-foreground">
+              This will create a new appointment type in your NexHealth account that can then be mapped to spoken service names below.
+            </p>
           </CardContent>
         </Card>
       )}

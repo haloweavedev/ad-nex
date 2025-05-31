@@ -94,6 +94,7 @@ export async function POST(request: NextRequest) {
             // If successful, store any additional data from the webhook
             if (status === "success" && appointmentData.foreign_id) {
               updateData.summary = `Appointment successfully synced to EHR with ID: ${appointmentData.foreign_id}`;
+              updateData.ehr_appointment_foreign_id = appointmentData.foreign_id;
             } else if (status === "failure") {
               updateData.summary = `Appointment failed to sync to EHR: ${payload.message || "Unknown error"}`;
             }

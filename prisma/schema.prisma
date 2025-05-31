@@ -84,6 +84,7 @@ model CallLog {
   booked_appointment_start_time   DateTime? // Start time of the booked appointment
   booked_appointment_end_time     DateTime? // End time of the booked appointment
   booked_appointment_note         String?   @db.Text // Note added to the appointment
+  ehr_appointment_foreign_id      String? // EHR's native appointment ID from webhook
 
   transcript_text     String?  @db.Text
   summary             String?  @db.Text

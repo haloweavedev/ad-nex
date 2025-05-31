@@ -71,7 +71,7 @@ async function nexHealthRequest(
   subdomain: string,
   locationId?: string,
   data?: any,
-  additionalParams?: Record<string, string>
+  additionalParams?: Record<string, string | string[]>
 ): Promise<any> {
   const url = new URL(`https://nexhealth.info${path}`);
   
@@ -83,9 +83,14 @@ async function nexHealthRequest(
   
   // Add any additional parameters
   if (additionalParams) {
-    Object.entries(additionalParams).forEach(([key, value]) => {
-      url.searchParams.set(key, value);
-    });
+    for (const [key, valueOrValues] of Object.entries(additionalParams)) {
+      if (Array.isArray(valueOrValues)) {
+        // Handle array parameters (e.g., pids[], operatory_ids[])
+        (valueOrValues as string[]).forEach(v => url.searchParams.append(key, v));
+      } else {
+        url.searchParams.set(key, valueOrValues as string);
+      }
+    }
   }
 
   const token = await getNexHealthBearerToken();
@@ -221,7 +226,7 @@ export async function getAppointmentSlots(
     days?: number;
   }
 ): Promise<any> {
-  const additionalParams: Record<string, string> = {
+  const additionalParams: Record<string, string | string[]> = {
     appointment_type_id: params.appointment_type_id,
     start_date: params.start_date,
   };
@@ -234,15 +239,11 @@ export async function getAppointmentSlots(
   additionalParams["lids[]"] = locationId;
 
   if (params.provider_ids && params.provider_ids.length > 0) {
-    params.provider_ids.forEach((id) => {
-      additionalParams[`pids[]`] = id; // Use pids[] format
-    });
+    additionalParams["pids[]"] = params.provider_ids; // Pass array directly
   }
 
   if (params.operatory_ids && params.operatory_ids.length > 0) {
-    params.operatory_ids.forEach((id) => {
-      additionalParams[`operatory_ids[]`] = id; // Use operatory_ids[] format
-    });
+    additionalParams["operatory_ids[]"] = params.operatory_ids; // Pass array directly
   }
 
   return nexHealthRequest("GET", "/appointment_slots", subdomain, undefined, undefined, additionalParams);
@@ -301,10 +302,17 @@ export async function searchPatients(
  */
 export async function getPatientById(
   subdomain: string,
-  locationId: string,
-  patientId: string
+  patientId: string,
+  locationId?: string, // Location ID might be optional for this specific endpoint
+  include?: string[]  // e.g., ['upcoming_appts']
 ): Promise<any> {
-  return nexHealthRequest("GET", `/patients/${patientId}`, subdomain, locationId);
+  const additionalParams: Record<string, string | string[]> = {};
+  if (include && include.length > 0) {
+    additionalParams["include[]"] = include;
+  }
+  // GET /patients/{id} does not take location_id as a query param in the provided spec,
+  // but subdomain is still needed for the nexHealthRequest wrapper.
+  return nexHealthRequest("GET", `/patients/${patientId}`, subdomain, undefined, undefined, additionalParams);
 }
 
 /**
@@ -346,4 +354,64 @@ export async function getSyncStatus(
   locationId: string
 ): Promise<any> {
   return nexHealthRequest("GET", "/sync_status", subdomain, locationId);
+}
+
+/**
+ * Create a new NexHealth appointment type
+ */
+export async function createNexHealthAppointmentType(
+  subdomain: string,
+  locationId: string, // Or institutionId if not location-scoped
+  appointmentTypeDetails: {
+    name: string;
+    minutes: number;
+    bookable_online: boolean;
+    parent_type?: "Institution" | "Location"; // Default to "Location" if locationId is provided
+    parent_id?: string; // Will be locationId if parent_type is "Location"
+    emr_appt_descriptor_ids?: string[];
+  }
+): Promise<any> {
+  const data = {
+    appointment_type: {
+      name: appointmentTypeDetails.name,
+      minutes: appointmentTypeDetails.minutes,
+      bookable_online: appointmentTypeDetails.bookable_online,
+      parent_type: appointmentTypeDetails.parent_type || "Location", // Assuming location-scoped by default
+      parent_id: appointmentTypeDetails.parent_id || locationId,    // Use locationId if parent_type is Location
+      emr_appt_descriptor_ids: appointmentTypeDetails.emr_appt_descriptor_ids,
+    },
+  };
+  // If your practice uses institution-scoped appointment types, adjust parent_type and parent_id accordingly.
+  // The API spec says location_id is required for POST /appointment_types if parent_type is Location.
+  // The subdomain is a query param.
+
+  // The API spec for POST /appointment_types only takes `subdomain` as a query param.
+  // `location_id` is part of the request body if `parent_type` is 'Location'.
+
+  return nexHealthRequest(
+    "POST",
+    "/appointment_types",
+    subdomain, // Pass subdomain for nexHealthRequest's base logic
+    undefined, // locationId is not a top-level query param for this POST
+    data
+  );
+}
+
+/**
+ * Get appointments for a specific patient
+ */
+export async function getAppointmentsForPatient(
+  subdomain: string,
+  locationId: string,
+  patientId: string,
+  startDate: string, // e.g., "YYYY-MM-DD"
+  endDate: string    // e.g., "YYYY-MM-DD"
+): Promise<any> {
+  const additionalParams: Record<string, string | string[]> = {
+    patient_id: patientId,
+    start: startDate, // Ensure correct ISO format if time is needed
+    end: endDate,     // Ensure correct ISO format
+    "include[]": ["provider", "operatory", "appointment_type"] // Example includes
+  };
+  return nexHealthRequest("GET", "/appointments", subdomain, locationId, undefined, additionalParams);
 } 
