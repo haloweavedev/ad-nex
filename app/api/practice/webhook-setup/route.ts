@@ -51,7 +51,7 @@ export async function POST() {
         webhook_status: result.status,
         webhook_last_success: result.success ? new Date() : undefined,
         webhook_error_message: result.success ? null : result.message,
-        webhook_subscription_id: result.subscriptionId || null,
+        webhook_subscription_id: result.subscriptionId ? String(result.subscriptionId) : null,
       },
     });
 

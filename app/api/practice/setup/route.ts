@@ -114,7 +114,7 @@ export async function POST(request: NextRequest) {
             webhook_last_attempt: new Date(),
             webhook_last_success: webhookResult.success ? new Date() : undefined,
             webhook_error_message: webhookResult.success ? null : webhookResult.message,
-            webhook_subscription_id: webhookResult.subscriptionId || null,
+            webhook_subscription_id: webhookResult.subscriptionId ? String(webhookResult.subscriptionId) : null,
           },
         });
 
@@ -160,4 +160,4 @@ export async function POST(request: NextRequest) {
       { status: 500 }
     );
   }
-} 
+}
