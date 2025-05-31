@@ -104,9 +104,12 @@ async function nexHealthRequest(
     headers["Content-Type"] = "application/json";
   }
 
-  console.log(`Making NexHealth API call: ${method} ${url.toString()}`);
+  console.log(`=== NEXHEALTH API REQUEST ===`);
+  console.log(`Method: ${method}`);
+  console.log(`URL: ${url.toString()}`);
+  console.log(`Headers: ${JSON.stringify({ ...headers, Authorization: `Bearer ${token.substring(0, 20)}...` }, null, 2)}`);
   if (data) {
-    console.log("Request data:", JSON.stringify(data, null, 2));
+    console.log(`Request Body: ${JSON.stringify(data, null, 2)}`);
   }
 
   try {
@@ -117,23 +120,110 @@ async function nexHealthRequest(
     });
 
     const responseText = await response.text();
-    console.log(`NexHealth API response status: ${response.status}`);
-    console.log("Response body:", responseText);
+    console.log(`=== NEXHEALTH API RESPONSE ===`);
+    console.log(`Status: ${response.status} ${response.statusText}`);
+    console.log(`Response Headers: ${JSON.stringify(Object.fromEntries(response.headers.entries()), null, 2)}`);
+    console.log(`Response Body: ${responseText}`);
 
     if (!response.ok) {
+      const errorDetails = {
+        status: response.status,
+        statusText: response.statusText,
+        url: url.toString(),
+        method,
+        responseBody: responseText
+      };
+      console.error(`=== NEXHEALTH API ERROR ===`, errorDetails);
       throw new Error(`NexHealth API error: ${response.status} ${response.statusText} - ${responseText}`);
     }
 
-    const responseJson = JSON.parse(responseText);
+    let responseJson;
+    try {
+      responseJson = JSON.parse(responseText);
+    } catch (parseError) {
+      console.error(`Failed to parse NexHealth response as JSON:`, parseError);
+      throw new Error(`Invalid JSON response from NexHealth: ${responseText}`);
+    }
     
     if (!responseJson.code) {
-      throw new Error(`NexHealth API returned error: ${responseJson.message || "Unknown error"}`);
+      const nexHealthError = {
+        message: responseJson.message || responseJson.description || "Unknown NexHealth error",
+        errors: responseJson.error || responseJson.errors || [],
+        fullResponse: responseJson
+      };
+      console.error(`=== NEXHEALTH BUSINESS LOGIC ERROR ===`, nexHealthError);
+      throw new Error(`NexHealth API returned error: ${nexHealthError.message} - Errors: ${JSON.stringify(nexHealthError.errors)}`);
     }
 
+    console.log(`✅ NexHealth API call successful`);
     return responseJson.data;
   } catch (error) {
-    console.error(`NexHealth API request failed: ${method} ${path}`, error);
+    console.error(`=== NEXHEALTH API REQUEST FAILED ===`);
+    console.error(`Method: ${method}, Path: ${path}, Subdomain: ${subdomain}`);
+    console.error(`Error:`, error);
     throw error;
+  }
+}
+
+/**
+ * Search for patients in NexHealth by various criteria
+ */
+export async function searchPatients(
+  subdomain: string,
+  locationId: string,
+  searchParams: {
+    first_name?: string;
+    last_name?: string;
+    phone_number?: string;
+    date_of_birth?: string;
+    email?: string;
+  }
+): Promise<any[]> {
+  console.log("=== SEARCHING PATIENTS ===");
+  console.log("Search parameters:", searchParams);
+
+  const queryParams: Record<string, string> = {};
+  
+  // Add non-empty search parameters
+  if (searchParams.first_name?.trim()) {
+    queryParams.first_name = searchParams.first_name.trim();
+  }
+  if (searchParams.last_name?.trim()) {
+    queryParams.last_name = searchParams.last_name.trim();
+  }
+  if (searchParams.phone_number?.trim()) {
+    // Clean phone number (remove spaces, dashes, parentheses)
+    const cleanPhone = searchParams.phone_number.replace(/[\s\-\(\)]/g, '');
+    queryParams.phone_number = cleanPhone;
+  }
+  if (searchParams.date_of_birth?.trim()) {
+    queryParams.date_of_birth = searchParams.date_of_birth.trim();
+  }
+  if (searchParams.email?.trim()) {
+    queryParams.email = searchParams.email.trim();
+  }
+
+  if (Object.keys(queryParams).length === 0) {
+    console.warn("No valid search parameters provided for patient search");
+    return [];
+  }
+
+  try {
+    const patients = await nexHealthRequest(
+      "GET",
+      "/patients",
+      subdomain,
+      locationId,
+      undefined,
+      queryParams
+    );
+
+    console.log(`Patient search returned: ${patients?.length || 0} patients`);
+    return patients || [];
+  } catch (error) {
+    console.error("Patient search failed:", error);
+    // Return empty array instead of throwing to allow fallback to patient creation
+    return [];
   }
 }
 
@@ -144,7 +234,7 @@ export async function createPatient(
   subdomain: string,
   locationId: string,
   providerId: string,
-  patientDetails: {
+  patientData: {
     first_name: string;
     last_name: string;
     phone_number: string;
@@ -153,23 +243,103 @@ export async function createPatient(
     gender?: string;
   }
 ): Promise<any> {
-  const data = {
-    provider: {
-      provider_id: providerId,
+  console.log("=== CREATING PATIENT ===");
+  console.log("Patient data:", { ...patientData, phone_number: patientData.phone_number.substring(0, 6) + "..." });
+  console.log("Provider ID:", providerId);
+
+  // Validate required fields
+  if (!patientData.first_name?.trim() || !patientData.last_name?.trim() || !patientData.phone_number?.trim()) {
+    throw new Error("Missing required patient information: first_name, last_name, or phone_number");
+  }
+
+  if (!providerId?.trim()) {
+    throw new Error("Provider ID is required for patient creation");
+  }
+
+  // Clean and format phone number
+  const cleanPhone = patientData.phone_number.replace(/[\s\-\(\)]/g, '');
+  
+  // Validate phone number format (should be 10 digits for US)
+  if (!/^\d{10}$/.test(cleanPhone)) {
+    console.warn("Phone number format may be invalid:", cleanPhone);
+  }
+
+  // Format date of birth if provided
+  let formattedDob = patientData.date_of_birth;
+  if (formattedDob) {
+    try {
+      // Ensure it's in YYYY-MM-DD format
+      const date = new Date(formattedDob);
+      if (!isNaN(date.getTime())) {
+        formattedDob = date.toISOString().split('T')[0];
+      } else {
+        console.warn("Invalid date_of_birth format, omitting:", formattedDob);
+        formattedDob = undefined;
+      }
+    } catch (dateError) {
+      console.warn("Date parsing error, omitting date_of_birth:", dateError);
+      formattedDob = undefined;
+    }
+  }
+
+  const payload = {
+    user: {
+      first_name: patientData.first_name.trim(),
+      last_name: patientData.last_name.trim(),
+      phone_number: cleanPhone,
+      ...(patientData.email?.trim() && { email: patientData.email.trim() }),
+      ...(formattedDob && { date_of_birth: formattedDob }),
+      ...(patientData.gender && { gender: patientData.gender }),
     },
-    patient: {
-      first_name: patientDetails.first_name,
-      last_name: patientDetails.last_name,
-      email: patientDetails.email,
-      bio: {
-        date_of_birth: patientDetails.date_of_birth,
-        phone_number: patientDetails.phone_number,
-        gender: patientDetails.gender,
-      },
-    },
+    provider_id: providerId,
   };
 
-  return nexHealthRequest("POST", "/patients", subdomain, locationId, data);
+  console.log("Final payload for patient creation:", { 
+    ...payload, 
+    user: { 
+      ...payload.user, 
+      phone_number: payload.user.phone_number.substring(0, 6) + "..." 
+    } 
+  });
+
+  try {
+    const result = await nexHealthRequest(
+      "POST",
+      "/patients",
+      subdomain,
+      locationId,
+      payload
+    );
+
+    console.log("✅ Patient created successfully:", {
+      patient_id: result?.user?.id || result?.id,
+      user_id: result?.user?.id
+    });
+
+    return result;
+  } catch (error) {
+    console.error("❌ Patient creation failed:", error);
+    
+    // Provide more specific error information
+    if (error instanceof Error) {
+      const errorMessage = error.message.toLowerCase();
+      
+      if (errorMessage.includes('duplicate') || errorMessage.includes('already exists')) {
+        throw new Error("A patient with this information already exists. Please try searching for the existing patient.");
+      } else if (errorMessage.includes('invalid') && errorMessage.includes('phone')) {
+        throw new Error("The phone number format is invalid. Please provide a valid 10-digit phone number.");
+      } else if (errorMessage.includes('invalid') && errorMessage.includes('email')) {
+        throw new Error("The email format is invalid. Please provide a valid email address.");
+      } else if (errorMessage.includes('provider')) {
+        throw new Error("The selected provider is invalid or unavailable. Please check practice configuration.");
+      } else if (errorMessage.includes('unauthorized') || errorMessage.includes('authentication')) {
+        throw new Error("Authentication failed. Please check API credentials and practice configuration.");
+      }
+    }
+    
+    // Re-throw original error with context
+    throw new Error(`Patient creation failed: ${error instanceof Error ? error.message : 'Unknown error'}`);
+  }
 }
 
 /**
@@ -180,6 +350,45 @@ export async function getAppointmentTypes(
   locationId: string
 ): Promise<any> {
   return nexHealthRequest("GET", "/appointment_types", subdomain, locationId);
+}
+
+/**
+ * Get a specific appointment type by ID
+ */
+export async function getAppointmentTypeById(
+  subdomain: string,
+  appointmentTypeId: string,
+  locationId?: string
+): Promise<any> {
+  console.log("=== GETTING APPOINTMENT TYPE BY ID ===");
+  console.log("Appointment Type ID:", appointmentTypeId);
+  
+  const additionalParams: Record<string, string> = {};
+  if (locationId) {
+    additionalParams.location_id = locationId;
+  }
+
+  try {
+    const result = await nexHealthRequest(
+      "GET", 
+      `/appointment_types/${appointmentTypeId}`, 
+      subdomain, 
+      undefined, 
+      undefined, 
+      additionalParams
+    );
+    
+    console.log("✅ Appointment type retrieved:", {
+      id: result?.id,
+      name: result?.name,
+      minutes: result?.minutes
+    });
+    
+    return result;
+  } catch (error) {
+    console.error("❌ Failed to get appointment type by ID:", error);
+    throw error;
+  }
 }
 
 /**
@@ -273,31 +482,6 @@ export async function bookAppointment(
 }
 
 /**
- * Search for existing patients (for future use)
- */
-export async function searchPatients(
-  subdomain: string,
-  locationId: string,
-  searchParams: {
-    phone_number?: string;
-    email?: string;
-    first_name?: string;
-    last_name?: string;
-    date_of_birth?: string;
-  }
-): Promise<any> {
-  const additionalParams: Record<string, string> = {};
-  
-  Object.entries(searchParams).forEach(([key, value]) => {
-    if (value) {
-      additionalParams[key] = value;
-    }
-  });
-
-  return nexHealthRequest("GET", "/patients", subdomain, locationId, undefined, additionalParams);
-}
-
-/**
  * Get patient by ID (for future use)
  */
 export async function getPatientById(
@@ -357,44 +541,106 @@ export async function getSyncStatus(
 }
 
 /**
- * Create a new NexHealth appointment type
+ * Create a new appointment type in NexHealth
  */
 export async function createNexHealthAppointmentType(
   subdomain: string,
-  locationId: string, // Or institutionId if not location-scoped
+  locationId: string,
   appointmentTypeDetails: {
     name: string;
     minutes: number;
-    bookable_online: boolean;
-    parent_type?: "Institution" | "Location"; // Default to "Location" if locationId is provided
-    parent_id?: string; // Will be locationId if parent_type is "Location"
+    bookable_online?: boolean;
     emr_appt_descriptor_ids?: string[];
+    parent_type?: "Institution" | "Location";
+    parent_id?: string;
   }
 ): Promise<any> {
+  console.log("=== CREATING APPOINTMENT TYPE ===");
+  console.log("Appointment type details:", appointmentTypeDetails);
+
+  // First, fetch existing appointment types to understand the practice's structure
+  let practiceParentType = "Location";
+  let practiceParentId = locationId;
+  
+  try {
+    console.log("Fetching existing appointment types to determine practice structure...");
+    const existingTypes = await nexHealthRequest(
+      "GET",
+      "/appointment_types",
+      subdomain,
+      locationId
+    );
+    
+    if (existingTypes && existingTypes.length > 0) {
+      // Use the same parent_type and parent_id as existing appointment types
+      const firstType = existingTypes[0];
+      if (firstType.parent_type && firstType.parent_id) {
+        practiceParentType = firstType.parent_type;
+        practiceParentId = firstType.parent_id.toString();
+        console.log(`Detected practice structure: parent_type=${practiceParentType}, parent_id=${practiceParentId}`);
+      }
+    }
+  } catch (fetchError) {
+    console.warn("Could not fetch existing appointment types, using defaults:", fetchError);
+  }
+
+  // Use provided parent details or detected practice structure
+  const finalParentType = appointmentTypeDetails.parent_type || practiceParentType;
+  const finalParentId = appointmentTypeDetails.parent_id || practiceParentId;
+
   const data = {
     appointment_type: {
       name: appointmentTypeDetails.name,
       minutes: appointmentTypeDetails.minutes,
-      bookable_online: appointmentTypeDetails.bookable_online,
-      parent_type: appointmentTypeDetails.parent_type || "Location", // Assuming location-scoped by default
-      parent_id: appointmentTypeDetails.parent_id || locationId,    // Use locationId if parent_type is Location
-      emr_appt_descriptor_ids: appointmentTypeDetails.emr_appt_descriptor_ids,
+      bookable_online: appointmentTypeDetails.bookable_online ?? true,
+      parent_type: finalParentType,
+      parent_id: finalParentId,
+      ...(appointmentTypeDetails.emr_appt_descriptor_ids && {
+        emr_appt_descriptor_ids: appointmentTypeDetails.emr_appt_descriptor_ids
+      }),
     },
   };
-  // If your practice uses institution-scoped appointment types, adjust parent_type and parent_id accordingly.
-  // The API spec says location_id is required for POST /appointment_types if parent_type is Location.
-  // The subdomain is a query param.
 
-  // The API spec for POST /appointment_types only takes `subdomain` as a query param.
-  // `location_id` is part of the request body if `parent_type` is 'Location'.
+  console.log("Final appointment type payload:", JSON.stringify(data, null, 2));
 
-  return nexHealthRequest(
-    "POST",
-    "/appointment_types",
-    subdomain, // Pass subdomain for nexHealthRequest's base logic
-    undefined, // locationId is not a top-level query param for this POST
-    data
-  );
+  try {
+    const result = await nexHealthRequest(
+      "POST",
+      "/appointment_types",
+      subdomain,
+      undefined, // No location_id in query params for POST /appointment_types
+      data
+    );
+
+    console.log("✅ Appointment type created successfully:", {
+      id: result?.id,
+      name: result?.name,
+      parent_type: result?.parent_type,
+      parent_id: result?.parent_id
+    });
+
+    return result;
+  } catch (error) {
+    console.error("❌ Appointment type creation failed:", error);
+    
+    // Provide more specific error information
+    if (error instanceof Error) {
+      const errorMessage = error.message.toLowerCase();
+      
+      if (errorMessage.includes('duplicate') || errorMessage.includes('already exists')) {
+        throw new Error("An appointment type with this name already exists.");
+      } else if (errorMessage.includes('parent_id') || errorMessage.includes('parent_type')) {
+        throw new Error("Invalid parent configuration. Please check practice setup in NexHealth.");
+      } else if (errorMessage.includes('unauthorized') || errorMessage.includes('authentication')) {
+        throw new Error("Authentication failed. Please check API credentials.");
+      } else if (errorMessage.includes('minutes') || errorMessage.includes('duration')) {
+        throw new Error("Invalid appointment duration. Please provide a valid number of minutes.");
+      }
+    }
+    
+    // Re-throw original error with context
+    throw new Error(`Appointment type creation failed: ${error instanceof Error ? error.message : 'Unknown error'}`);
+  }
 }
 
 /**

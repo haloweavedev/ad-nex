@@ -95,6 +95,9 @@ export default function SetupPage() {
   const [webhookStatus, setWebhookStatus] = useState<WebhookStatus | null>(null);
   const [webhookLoading, setWebhookLoading] = useState(false);
 
+  // Quick setup
+  const [isLoading, setIsLoading] = useState(false);
+
   // Fetch existing practice data on load
   useEffect(() => {
     const fetchPracticeData = async () => {
@@ -128,20 +131,20 @@ export default function SetupPage() {
 
   // Fetch service mappings when component loads
   useEffect(() => {
-    const fetchServiceMappings = async () => {
-      try {
-        const response = await fetch("/api/practice/service-mappings");
-        if (response.ok) {
-          const data = await response.json();
-          setServiceMappings(data.serviceMappings || []);
-        }
-      } catch (error) {
-        console.error("Error fetching service mappings:", error);
-      }
-    };
-
     fetchServiceMappings();
   }, []);
+
+  const fetchServiceMappings = async () => {
+    try {
+      const response = await fetch("/api/practice/service-mappings");
+      if (response.ok) {
+        const data = await response.json();
+        setServiceMappings(data.serviceMappings || []);
+      }
+    } catch (error) {
+      console.error("Error fetching service mappings:", error);
+    }
+  };
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -757,6 +760,151 @@ export default function SetupPage() {
           </CardContent>
         </Card>
       )}
+
+      {/* Quick Setup for Common Services */}
+      <Card className="mt-6">
+        <CardHeader>
+          <CardTitle>🚀 Quick Setup</CardTitle>
+          <CardDescription>
+            Automatically create common service mappings for your appointment types
+          </CardDescription>
+        </CardHeader>
+        <CardContent className="space-y-4">
+          {appointmentTypes.length > 0 && (
+            <div className="space-y-3">
+              <p className="text-sm text-muted-foreground">
+                Select an appointment type and click to automatically create common spoken variations:
+              </p>
+              
+              {appointmentTypes.map((type) => (
+                <div key={type.id} className="p-4 border rounded-lg space-y-3">
+                  <div className="flex items-center justify-between">
+                    <div>
+                      <h4 className="font-medium">{type.name}</h4>
+                      <p className="text-sm text-muted-foreground">{type.duration} minutes</p>
+                    </div>
+                  </div>
+                  
+                  <div className="flex flex-wrap gap-2">
+                    <Button
+                      size="sm"
+                      variant="outline"
+                      onClick={async () => {
+                        setIsLoading(true);
+                        try {
+                          const response = await fetch("/api/practice/service-mappings", {
+                            method: "POST",
+                            headers: { "Content-Type": "application/json" },
+                            body: JSON.stringify({
+                              action: "populate_common_mappings",
+                              appointment_type_id: type.id.toString(),
+                              service_type: "cleaning"
+                            }),
+                          });
+
+                          if (response.ok) {
+                            const result = await response.json();
+                            toast.success(result.message);
+                            await fetchServiceMappings();
+                          } else {
+                            throw new Error("Failed to create mappings");
+                          }
+                        } catch {
+                          toast.error("Failed to create cleaning mappings");
+                        } finally {
+                          setIsLoading(false);
+                        }
+                      }}
+                      disabled={isLoading}
+                    >
+                      + Cleaning Variations
+                    </Button>
+                    
+                    <Button
+                      size="sm"
+                      variant="outline"
+                      onClick={async () => {
+                        setIsLoading(true);
+                        try {
+                          const response = await fetch("/api/practice/service-mappings", {
+                            method: "POST",
+                            headers: { "Content-Type": "application/json" },
+                            body: JSON.stringify({
+                              mappings: [
+                                { spoken_service_name: "checkup", nexhealth_appointment_type_id: type.id },
+                                { spoken_service_name: "check-up", nexhealth_appointment_type_id: type.id },
+                                { spoken_service_name: "examination", nexhealth_appointment_type_id: type.id },
+                                { spoken_service_name: "exam", nexhealth_appointment_type_id: type.id },
+                                { spoken_service_name: "routine checkup", nexhealth_appointment_type_id: type.id }
+                              ]
+                            })
+                          });
+                          
+                          if (response.ok) {
+                            toast.success("Checkup variations created successfully!");
+                            await fetchServiceMappings();
+                          } else {
+                            toast.error("Failed to create checkup mappings");
+                          }
+                        } catch {
+                          toast.error("Failed to create checkup mappings");
+                        } finally {
+                          setIsLoading(false);
+                        }
+                      }}
+                      disabled={isLoading}
+                    >
+                      + Checkup Variations
+                    </Button>
+                    
+                    <Button
+                      size="sm"
+                      variant="outline"
+                      onClick={async () => {
+                        setIsLoading(true);
+                        try {
+                          const response = await fetch("/api/practice/service-mappings", {
+                            method: "POST",
+                            headers: { "Content-Type": "application/json" },
+                            body: JSON.stringify({
+                              mappings: [
+                                { spoken_service_name: "consultation", nexhealth_appointment_type_id: type.id },
+                                { spoken_service_name: "consult", nexhealth_appointment_type_id: type.id },
+                                { spoken_service_name: "new patient consultation", nexhealth_appointment_type_id: type.id },
+                                { spoken_service_name: "initial consultation", nexhealth_appointment_type_id: type.id }
+                              ]
+                            })
+                          });
+                          
+                          if (response.ok) {
+                            toast.success("Consultation variations created successfully!");
+                            await fetchServiceMappings();
+                          } else {
+                            toast.error("Failed to create consultation mappings");
+                          }
+                        } catch {
+                          toast.error("Failed to create consultation mappings");
+                        } finally {
+                          setIsLoading(false);
+                        }
+                      }}
+                      disabled={isLoading}
+                    >
+                      + Consultation Variations
+                    </Button>
+                  </div>
+                </div>
+              ))}
+            </div>
+          )}
+          
+          {appointmentTypes.length === 0 && (
+            <p className="text-sm text-muted-foreground">
+              Create or fetch appointment types first to enable quick setup.
+            </p>
+          )}
+        </CardContent>
+      </Card>
     </div>
   );
 } 

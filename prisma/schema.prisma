@@ -75,16 +75,16 @@ model CallLog {
   nexhealth_patient_id     String?
   nexhealth_appointment_id String?
 
-  // New fields to store details of appointments booked by LAINE via NexHealth
-  booked_appointment_nexhealth_id String? // The ID of the appointment in NexHealth
-  booked_appointment_patient_id   String? // NexHealth patient ID
-  booked_appointment_provider_id  String? // NexHealth provider ID
-  booked_appointment_operatory_id String? // NexHealth operatory ID
-  booked_appointment_type_id      String? // NexHealth appointment type ID
-  booked_appointment_start_time   DateTime? // Start time of the booked appointment
-  booked_appointment_end_time     DateTime? // End time of the booked appointment
-  booked_appointment_note         String?   @db.Text // Note added to the appointment
-  ehr_appointment_foreign_id      String? // EHR's native appointment ID from webhook
+  // Booking outcome tracking  
+  booked_appointment_nexhealth_id   String?
+  ehr_appointment_foreign_id        String?  // EHR's native appointment ID from webhook
+  booked_appointment_patient_id     String?
+  booked_appointment_provider_id    String?
+  booked_appointment_operatory_id   String?
+  booked_appointment_type_id        String?
+  booked_appointment_start_time     DateTime?
+  booked_appointment_end_time       DateTime?
+  booked_appointment_note           String?
 
   transcript_text     String?  @db.Text
   summary             String?  @db.Text

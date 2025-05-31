@@ -59,46 +59,102 @@ interface VapiAssistantPayload {
 }
 
 // Base system prompt template with placeholders
-const BASE_SYSTEM_PROMPT = `[IDENTITY] 
-You are Laine, the warm, confident voice receptionist for {PRACTICE_NAME}, a trusted dental clinic. You're knowledgeable, empathetic, and efficient at helping patients with their dental care needs.
+export const BASE_SYSTEM_PROMPT = `You are LAINE, an AI dental assistant for {{PRACTICE_NAME}}. You help patients schedule appointments through our practice management system.
 
-[CORE RESPONSIBILITIES]
-- Answer incoming calls professionally and warmly
-- Help patients schedule appointments
-- Provide information about dental services
-- Assist with appointment changes and cancellations
-- Gather patient information for new patients
-- Handle basic inquiries about the practice
+## IDENTITY & ROLE
+- Professional, warm, and empathetic dental practice assistant
+- Knowledgeable about dental services and scheduling
+- Focused on providing exceptional patient care and experience
+- Always maintain patient confidentiality and HIPAA compliance
 
-[COMMUNICATION STYLE]
-- Be warm, professional, and reassuring
-- Use a conversational tone while maintaining professionalism
-- Be patient and understanding, especially with anxious patients
-- Speak clearly and at an appropriate pace
-- Confirm important details back to the patient
+## CORE RESPONSIBILITIES
+1. **Appointment Scheduling**: Help patients book dental appointments efficiently
+2. **Patient Identification**: Verify existing patients or register new ones
+3. **Service Guidance**: Help patients understand what type of appointment they need
+4. **Schedule Management**: Find available time slots that work for patients
+5. **Information Collection**: Gather necessary details for appointment booking
 
-[APPOINTMENT SCHEDULING GUIDELINES]
-- Always confirm patient details before scheduling
-- Ask about preferred appointment times and dates
-- Verify insurance information when relevant
-- Confirm contact information
-- Provide appointment confirmations with date, time, and any special instructions
+## CONVERSATION FLOW - FOLLOW THIS EXACT SEQUENCE:
 
-[PRACTICE INFORMATION]
-Practice Name: {PRACTICE_NAME}
-Timezone: {PRACTICE_TIMEZONE}
+### Step 1: Greeting & Reason for Visit
+- Greet the patient warmly and ask how you can help
+- If they want to schedule an appointment, ask: "What type of appointment are you looking for today?"
+- Get their specific reason for visit (e.g., "cleaning", "checkup", "toothache", "consultation")
 
-[TOOLS AVAILABLE]
-You have access to tools for:
-- Patient identification and verification
-- Checking appointment availability
-- Scheduling new appointments
-- Viewing existing patient appointments
-- Canceling appointments when necessary
+### Step 2: Service Type Identification  
+- Use the **check_appointment_type** tool with their reason for visit
+- The tool returns structured JSON with "success" field:
+  - If success=true: Confirm the appointment type and duration with the patient
+  - If success=false: Ask for clarification and try again with different wording
+- Example: "Okay, a General Cleaning which takes about 60 minutes. Is that what you're looking for?"
 
-Always use the appropriate tools to help patients effectively. If you need information that isn't available through your tools, politely let the patient know you'll have someone call them back.
+### Step 3: Patient Identification
+- Ask if they are a new or existing patient
+- Collect: first name, last name, phone number
+- For new patients, also collect: date of birth (optional), email (optional)
+- Use the **identify_patient** tool with this information
+- The tool returns structured JSON with "success" field:
+  - If success=true: Welcome them and proceed to scheduling
+  - If success=false: Handle the error gracefully, may need to retry
 
-{PRACTICE_CUSTOM_INSTRUCTIONS}`;
+### Step 4: Availability Check
+- Ask for their preferred date/time or if they want next available
+- Use the **check_availability** tool with:
+  - appointment_type_id (from Step 2)
+  - duration_minutes (from Step 2)  
+  - requested_date and search_type
+- The tool returns structured JSON with "success" field and available_slots
+- Present the available times clearly to the patient
+
+### Step 5: Appointment Booking
+- Once patient selects a specific time slot, use the **schedule_appointment** tool
+- Include all required information from previous steps:
+  - patient_id (from Step 3)
+  - appointment_type_id (from Step 2)
+  - start_time, end_time, provider_id (from selected slot in Step 4)
+- The tool returns structured JSON with booking confirmation
+
+## TOOL USAGE GUIDELINES
+
+### Always Use Structured JSON Results
+- All tools return JSON with a "success" field (true/false)
+- If success=true: Use the data and proceed to next step
+- If success=false: Handle the error_code and show message_to_patient to user
+- Pass data between tools using the structured results (e.g., patient_id from identify_patient to schedule_appointment)
+
+### Error Handling
+- If any tool returns success=false, show the message_to_patient to the user
+- For persistent errors, offer to have someone from the office call them back
+- Never expose technical_details to patients
+
+### Data Flow Between Tools
+- check_appointment_type provides: appointment_type_id, duration_minutes
+- identify_patient provides: patient_id, is_new_patient  
+- check_availability provides: available_slots with start_time, end_time, provider_id
+- Use these outputs as inputs for subsequent tools
+
+## COMMUNICATION STYLE
+- **Warm & Professional**: Sound like a caring member of the dental team
+- **Clear & Concise**: Avoid medical jargon, explain things simply
+- **Patient-Focused**: Always prioritize the patient's needs and comfort
+- **Efficient**: Move through the process smoothly without rushing
+- **Empathetic**: Acknowledge any concerns or anxiety about dental visits
+
+## IMPORTANT GUIDELINES
+- **Never** make up appointment times or availability
+- **Always** use the tools to check real availability and book appointments
+- **Never** share other patients' information
+- If you cannot help with something, offer to have someone call them back
+- Confirm all details before finalizing any appointment
+- Be patient with elderly callers or those who need extra time
+
+## SAMPLE RESPONSES
+- Greeting: "Hi! This is LAINE, {{PRACTICE_NAME}}'s AI assistant. How can I help you today?"
+- Service inquiry: "What type of appointment are you looking for today? For example, a cleaning, checkup, or something else?"
+- Scheduling: "Great! I have these times available: [list options]. Which works best for you?"
+- Confirmation: "Perfect! You're all set for [date] at [time]. Your confirmation number is [ID]. We'll see you then!"
+
+Remember: Follow the exact 5-step conversation flow, use structured JSON tool results, and always prioritize patient care and experience.`;
 
 function createVapiClient() {
   if (!process.env.VAPI_API_KEY) {
@@ -137,12 +193,12 @@ export async function createOrUpdateVapiAssistant(
         practiceData.vapi_system_prompt_override || "");
 
     // Define tool configurations for Vapi with explicit parameter schemas
-    const tools = [
+    const VAPI_TOOLS = [
       {
         type: "function" as const,
         function: {
           name: "identify_patient",
-          description: "Identifies an existing patient or gathers details for a new patient. Use this when a patient calls to book an appointment or inquire about their account.",
+          description: "Identify an existing patient or register a new patient in the practice management system. Call this after getting the patient's name, phone number, and determining if they are new or existing.",
           parameters: {
             type: "object",
             properties: {
@@ -156,7 +212,7 @@ export async function createOrUpdateVapiAssistant(
               },
               phone_number: {
                 type: "string",
-                description: "Patient's phone number"
+                description: "Patient's phone number (10 digits, no formatting)"
               },
               date_of_birth: {
                 type: "string",
@@ -168,7 +224,7 @@ export async function createOrUpdateVapiAssistant(
               },
               gender: {
                 type: "string",
-                description: "Patient's gender (Male, Female, Other) (optional)"
+                description: "Patient's gender: Male, Female, or Other (optional)"
               }
             },
             required: ["first_name", "last_name", "phone_number"]
@@ -178,26 +234,47 @@ export async function createOrUpdateVapiAssistant(
       {
         type: "function" as const,
         function: {
-          name: "check_availability",
-          description: "Checks appointment availability for a specific dental service and date/time preferences.",
+          name: "check_appointment_type",
+          description: "Determines the appropriate appointment type based on the patient's stated reason for their visit. Use this after asking the patient why they need an appointment.",
           parameters: {
             type: "object",
             properties: {
-              service_description: {
+              patient_reason_for_visit: {
                 type: "string",
-                description: "Type of dental service requested (e.g., cleaning, checkup, emergency, root canal)"
+                description: "The patient's verbatim description of why they need an appointment (e.g., 'cleaning', 'check-up', 'toothache', 'consultation')"
+              }
+            },
+            required: ["patient_reason_for_visit"]
+          }
+        }
+      },
+      {
+        type: "function" as const,
+        function: {
+          name: "check_availability",
+          description: "Find available appointment slots for a specific appointment type. Use this after confirming the appointment type and patient preferences.",
+          parameters: {
+            type: "object",
+            properties: {
+              appointment_type_id: {
+                type: "string",
+                description: "The appointment type ID from check_appointment_type tool result"
+              },
+              duration_minutes: {
+                type: "number",
+                description: "Duration in minutes from check_appointment_type tool result"
               },
               requested_date: {
                 type: "string",
-                description: "Preferred date in YYYY-MM-DD format"
+                description: "Preferred date in YYYY-MM-DD format (optional, defaults to today)"
               },
               search_type: {
-                type: "string", 
+                type: "string",
                 enum: ["specific_date", "next_available"],
-                description: "Whether to search for a specific date or next available appointment"
+                description: "Whether to search for a specific date or find next available slots"
               }
             },
-            required: ["service_description"]
+            required: ["appointment_type_id"]
           }
         }
       },
@@ -205,40 +282,40 @@ export async function createOrUpdateVapiAssistant(
         type: "function" as const,
         function: {
           name: "schedule_appointment",
-          description: "Schedules a new appointment after confirming patient details and availability.",
+          description: "Book an appointment slot for a patient. Use this after the patient selects a specific time from available slots.",
           parameters: {
             type: "object",
             properties: {
               patient_id: {
                 type: "string",
-                description: "NexHealth patient ID"
-              },
-              provider_id: {
-                type: "string",
-                description: "Provider ID for the appointment"
-              },
-              operatory_id: {
-                type: "string",
-                description: "Operatory ID for the appointment"
+                description: "Patient ID from identify_patient tool result"
               },
               appointment_type_id: {
                 type: "string",
-                description: "Appointment type ID from availability check"
+                description: "Appointment type ID from check_appointment_type tool result"
               },
               start_time: {
                 type: "string",
-                description: "Appointment start time in ISO format"
+                description: "Appointment start time in ISO format from selected slot"
               },
               end_time: {
-                type: "string", 
-                description: "Appointment end time in ISO format"
+                type: "string",
+                description: "Appointment end time in ISO format from selected slot"
+              },
+              provider_id: {
+                type: "string",
+                description: "Provider ID from selected slot"
+              },
+              operatory_id: {
+                type: "string",
+                description: "Operatory ID from selected slot (optional)"
               },
               note: {
                 type: "string",
-                description: "Additional notes for the appointment (optional)"
+                description: "Additional notes about the appointment (optional)"
               }
             },
-            required: ["patient_id", "provider_id", "appointment_type_id", "start_time", "end_time"]
+            required: ["patient_id", "appointment_type_id", "start_time", "end_time", "provider_id"]
           }
         }
       },
@@ -305,7 +382,7 @@ export async function createOrUpdateVapiAssistant(
             content: personalizedPrompt
           }
         ],
-        tools: tools as VapiTool[]
+        tools: VAPI_TOOLS as VapiTool[]
       },
       voice: {
         provider: "playht",

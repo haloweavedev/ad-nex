@@ -5,7 +5,8 @@ import {
   createPatient, 
   getAppointmentSlots, 
   bookAppointment,
-  searchPatients
+  searchPatients,
+  getAppointmentTypeById
 } from "@/lib/nexhealth.server";
 
 // Tool response type
@@ -367,6 +368,9 @@ async function executeTools(toolCallList: any[], practice: any, vapiCallId: stri
         case "identify_patient":
           result = await handleIdentifyPatient(parsedArguments, practice, vapiCallId);
           break;
+        case "check_appointment_type":
+          result = await handleCheckAppointmentType(parsedArguments, practice, vapiCallId);
+          break;
         case "check_availability":
           result = await handleFindAppointmentSlots(parsedArguments, practice, vapiCallId);
           break;
@@ -429,10 +433,38 @@ async function handleIdentifyPatient(params: any, practice: any, vapiCallId: str
     const gender = params.gender as string; // "Male", "Female", or "Other"
 
     if (!firstName || !lastName || !phoneNumber) {
+      console.warn("Missing required patient information:", { firstName, lastName, phoneNumber });
       return {
         result: JSON.stringify({
-          error: "Missing required information: first name, last name, or phone number.",
-          message: "I need at least your first name, last name, and phone number to proceed. Could you please provide those details?"
+          success: false,
+          error_code: "MISSING_REQUIRED_INFO",
+          message_to_patient: "I need at least your first name, last name, and phone number to proceed. Could you please provide those details?"
+        })
+      };
+    }
+
+    // Validate practice configuration
+    if (!practice.nexhealth_subdomain || !practice.nexhealth_location_id) {
+      console.error("Practice NexHealth configuration incomplete:", {
+        subdomain: practice.nexhealth_subdomain,
+        locationId: practice.nexhealth_location_id
+      });
+      return {
+        result: JSON.stringify({
+          success: false,
+          error_code: "PRACTICE_CONFIG_INCOMPLETE",
+          message_to_patient: "I'm having trouble accessing our patient system due to a configuration issue. Please call our office directly for assistance."
+        })
+      };
+    }
+
+    if (!practice.nexhealth_selected_provider_ids || practice.nexhealth_selected_provider_ids.length === 0) {
+      console.error("No providers selected for practice:", practice.id);
+      return {
+        result: JSON.stringify({
+          success: false,
+          error_code: "NO_PROVIDERS_CONFIGURED",
+          message_to_patient: "I apologize, but our system isn't properly configured for new patient registration right now. Please call our office directly and a staff member will help you schedule an appointment."
         })
       };
     }
@@ -454,7 +486,7 @@ async function handleIdentifyPatient(params: any, practice: any, vapiCallId: str
     let patientMessage = "";
 
     try {
-      console.log("Searching for existing patient...");
+      console.log("Searching for existing patient with:", { firstName, lastName, phoneNumber, formattedDob });
       const searchResults = await searchPatients(
         practice.nexhealth_subdomain!,
         practice.nexhealth_location_id!,
@@ -466,6 +498,8 @@ async function handleIdentifyPatient(params: any, practice: any, vapiCallId: str
         }
       );
 
+      console.log(`Patient search returned ${searchResults?.length || 0} results`);
+      
       // Check if we found a matching patient
       if (searchResults && searchResults.length > 0) {
         // Look for an exact match on name and phone
@@ -482,27 +516,21 @@ async function handleIdentifyPatient(params: any, practice: any, vapiCallId: str
           patientIdToStore = patient.id.toString();
           isNewPatient = false;
           patientMessage = `Welcome back, ${firstName}! I found your existing record in our system. How can I help you today?`;
+        } else {
+          console.log("No exact match found in search results");
         }
       }
     } catch (searchError) {
-      console.log("Patient search failed or returned no results, proceeding to create new patient:", searchError);
+      console.error("Patient search failed:", searchError);
+      // Continue to patient creation - search failure doesn't prevent new patient creation
     }
 
     // Step 2: Create new patient if not found
     if (!patient) {
       console.log("Creating new patient in NexHealth...");
-
-      // Get the first selected provider for patient registration
-      if (!practice.nexhealth_selected_provider_ids || practice.nexhealth_selected_provider_ids.length === 0) {
-        return {
-          result: JSON.stringify({
-            error: "Practice provider configuration missing.",
-            message: "I apologize, but our system isn't properly configured for new patient registration right now. Please call our office directly and a staff member will help you schedule an appointment."
-          })
-        };
-      }
-
+      
       const providerId = practice.nexhealth_selected_provider_ids[0];
+      console.log("Using provider ID:", providerId);
 
       const patientData = {
         first_name: firstName,
@@ -513,17 +541,35 @@ async function handleIdentifyPatient(params: any, practice: any, vapiCallId: str
         gender: gender || "Female" // Default to Female as per NexHealth suggestion for some EHRs
       };
 
-      const newPatient = await createPatient(
-        practice.nexhealth_subdomain!,
-        practice.nexhealth_location_id!,
-        providerId,
-        patientData
-      );
+      try {
+        const newPatient = await createPatient(
+          practice.nexhealth_subdomain!,
+          practice.nexhealth_location_id!,
+          providerId,
+          patientData
+        );
 
-      console.log("New patient created:", newPatient);
-      patientIdToStore = newPatient.user?.id?.toString() || newPatient.id?.toString();
-      isNewPatient = true;
-      patientMessage = `Perfect! I've created your patient record, ${firstName}. Welcome to our practice! Now, what type of appointment would you like to schedule?`;
+        console.log("New patient created successfully:", {
+          patientId: newPatient.user?.id || newPatient.id,
+          patientData: patientData
+        });
+        
+        patientIdToStore = newPatient.user?.id?.toString() || newPatient.id?.toString();
+        isNewPatient = true;
+        patientMessage = `Perfect! I've created your patient record, ${firstName}. Welcome to our practice! Now, what type of appointment would you like to schedule?`;
+      } catch (createError) {
+        console.error("Patient creation failed:", createError);
+        const errorMessage = createError instanceof Error ? createError.message : "Unknown error";
+        
+        return {
+          result: JSON.stringify({
+            success: false,
+            error_code: "PATIENT_CREATION_FAILED",
+            message_to_patient: "I'm having trouble creating your patient record right now. This might be due to a connectivity issue. Please try calling back in a few minutes, or call our office directly for assistance.",
+            technical_details: errorMessage.substring(0, 200) // Truncate for logging
+          })
+        };
+      }
     }
 
     // Step 3: Update CallLog with patient_id
@@ -540,34 +586,229 @@ async function handleIdentifyPatient(params: any, practice: any, vapiCallId: str
             patient_phone_number: phoneNumber
           }
         });
-        console.log(`CallLog ${vapiCallId} updated with nexhealth_patient_id: ${patientIdToStore}`);
+        console.log(`✅ CallLog ${vapiCallId} updated with nexhealth_patient_id: ${patientIdToStore}`);
       } catch (dbError) {
         console.error("Error updating call log:", dbError);
+        // Don't fail the entire operation for logging issues
       }
 
       return {
         result: JSON.stringify({
+          success: true,
           patient_id: patientIdToStore,
           is_new_patient: isNewPatient,
-          message: patientMessage
+          message_to_patient: patientMessage
         })
       };
     } else {
       console.error("Failed to obtain patient_id after search/create.");
       return {
         result: JSON.stringify({
-          error: "Could not identify or create patient record.",
-          message: "I'm having a bit of trouble accessing patient records right now. Could you try calling back in a few minutes?"
+          success: false,
+          error_code: "PATIENT_ID_UNAVAILABLE",
+          message_to_patient: "I'm having a bit of trouble accessing patient records right now. Could you try calling back in a few minutes?"
         })
       };
     }
 
   } catch (error) {
-    console.error("Error in handleIdentifyPatient:", error);
+    console.error("=== ERROR IN IDENTIFY_PATIENT ===");
+    console.error("Error details:", error);
+    console.error("Practice ID:", practice?.id);
+    console.error("VAPI Call ID:", vapiCallId);
+    
+    const errorMessage = error instanceof Error ? error.message : "Unknown error";
     return {
       result: JSON.stringify({
-        error: "Patient identification/registration failed.",
-        message: "I'm having trouble accessing our patient system right now. Let me have someone from our office call you back to help with your appointment."
+        success: false,
+        error_code: "PATIENT_IDENTIFICATION_FAILED",
+        message_to_patient: "I'm having trouble accessing our patient system right now. Let me have someone from our office call you back to help with your appointment.",
+        technical_details: errorMessage.substring(0, 200) // Truncate for logging
+      })
+    };
+  }
+}
+
+/**
+ * Check and determine the appropriate appointment type based on patient's reason for visit
+ */
+async function handleCheckAppointmentType(params: any, practice: any, vapiCallId: string): Promise<ToolResponse> {
+  try {
+    console.log("=== CHECKING APPOINTMENT TYPE ===");
+    console.log("Parameters:", JSON.stringify(params, null, 2));
+    console.log("Practice ID:", practice.id);
+
+    const { patient_reason_for_visit } = params;
+
+    if (!patient_reason_for_visit?.trim()) {
+      return {
+        result: JSON.stringify({
+          success: false,
+          error_code: "MISSING_REASON",
+          message_to_patient: "I need to know what type of appointment you're looking for. Could you tell me the reason for your visit?"
+        })
+      };
+    }
+
+    // Validate practice configuration
+    if (!practice.nexhealth_subdomain || !practice.nexhealth_location_id) {
+      console.error("Practice NexHealth configuration incomplete:", {
+        subdomain: practice.nexhealth_subdomain,
+        locationId: practice.nexhealth_location_id
+      });
+      return {
+        result: JSON.stringify({
+          success: false,
+          error_code: "PRACTICE_CONFIG_INCOMPLETE",
+          message_to_patient: "I'm having trouble accessing our appointment types due to a configuration issue. Please call our office directly."
+        })
+      };
+    }
+
+    console.log("Searching for service mapping for:", patient_reason_for_visit);
+
+    // Search for service mapping with case-insensitive matching
+    let serviceMapping = await db.serviceMapping.findFirst({
+      where: {
+        practice_id: practice.id,
+        spoken_service_name: {
+          equals: patient_reason_for_visit.trim(),
+          mode: 'insensitive'
+        }
+      }
+    });
+
+    // If no exact match, try common variations
+    if (!serviceMapping) {
+      console.log("No exact match found, trying variations...");
+      
+      const variations: string[] = [];
+      const lowerReason = patient_reason_for_visit.toLowerCase();
+      
+      // Build variations based on common patterns
+      if (lowerReason.includes('clean')) {
+        variations.push('cleaning', 'general cleaning', 'prophy', 'prophylaxis', 'hygiene', 'dental cleaning');
+      }
+      if (lowerReason.includes('check')) {
+        variations.push('checkup', 'check-up', 'examination', 'exam', 'routine checkup', 'dental exam');
+      }
+      if (lowerReason.includes('consult') || lowerReason.includes('new patient')) {
+        variations.push('consultation', 'new patient consultation', 'new patient', 'consult', 'initial consultation');
+      }
+      if (lowerReason.includes('emergen') || lowerReason.includes('urgent') || lowerReason.includes('pain')) {
+        variations.push('emergency', 'urgent care', 'pain visit', 'emergency appointment');
+      }
+      
+      // Try each variation
+      for (const variation of variations) {
+        console.log(`Trying variation: ${variation}`);
+        serviceMapping = await db.serviceMapping.findFirst({
+          where: {
+            practice_id: practice.id,
+            spoken_service_name: {
+              equals: variation,
+              mode: 'insensitive'
+            }
+          }
+        });
+        if (serviceMapping) {
+          console.log(`Found mapping with variation: ${variation} -> ${serviceMapping.nexhealth_appointment_type_id}`);
+          break;
+        }
+      }
+    } else {
+      console.log(`Found exact mapping: ${patient_reason_for_visit} -> ${serviceMapping.nexhealth_appointment_type_id}`);
+    }
+
+    if (!serviceMapping) {
+      console.warn("No service mapping found for:", patient_reason_for_visit);
+      
+      // Get available service mappings for helpful error message
+      const availableMappings = await db.serviceMapping.findMany({
+        where: { practice_id: practice.id, is_active: true },
+        select: { spoken_service_name: true }
+      });
+      
+      console.log("Available service mappings:", availableMappings.map(m => m.spoken_service_name));
+      
+      const suggestionText = availableMappings.length > 0 
+        ? `I can help with: ${availableMappings.map(m => m.spoken_service_name).slice(0, 5).join(', ')}`
+        : "Let me get someone from our office to help you";
+      
+      return {
+        result: JSON.stringify({
+          success: false,
+          error_code: "NO_SERVICE_MAPPING_FOUND",
+          message_to_patient: `I'm not sure about "${patient_reason_for_visit}". ${suggestionText}. Could you try describing it differently?`
+        })
+      };
+    }
+
+    // Fetch appointment type details from NexHealth
+    try {
+      console.log("Fetching appointment type details from NexHealth...");
+      const appointmentType = await getAppointmentTypeById(
+        practice.nexhealth_subdomain,
+        serviceMapping.nexhealth_appointment_type_id,
+        practice.nexhealth_location_id
+      );
+
+      console.log("✅ Appointment type details retrieved:", appointmentType);
+
+      // Update call log with detected service type
+      try {
+        await db.callLog.updateMany({
+          where: {
+            vapi_call_id: vapiCallId,
+            practice_id: practice.id
+          },
+          data: {
+            detected_intent: `service_type_identified_${appointmentType.id}`,
+            // Store the matched service mapping for reference
+            summary: `Patient requested: "${patient_reason_for_visit}" -> Mapped to: "${appointmentType.name}"`
+          }
+        });
+        console.log(`✅ CallLog ${vapiCallId} updated with appointment type detection`);
+      } catch (dbError) {
+        console.error("Error updating call log:", dbError);
+        // Don't fail the operation for logging issues
+      }
+
+      return {
+        result: JSON.stringify({
+          success: true,
+          appointment_type_id: appointmentType.id.toString(),
+          appointment_type_name: appointmentType.name,
+          duration_minutes: appointmentType.minutes || 30,
+          message_to_patient: `Okay, a ${appointmentType.name}. That usually takes about ${appointmentType.minutes || 30} minutes. Is that what you're looking for?`
+        })
+      };
+
+    } catch (nexhealthError) {
+      console.error("Failed to fetch appointment type from NexHealth:", nexhealthError);
+      
+      return {
+        result: JSON.stringify({
+          success: false,
+          error_code: "NEXHEALTH_API_ERROR",
+          message_to_patient: "I'm having trouble looking up appointment types right now. Please try again in a moment or call our office directly."
+        })
+      };
+    }
+
+  } catch (error) {
+    console.error("=== ERROR IN CHECK_APPOINTMENT_TYPE ===");
+    console.error("Error details:", error);
+    console.error("Practice ID:", practice?.id);
+    console.error("VAPI Call ID:", vapiCallId);
+    
+    const errorMessage = error instanceof Error ? error.message : "Unknown error";
+    return {
+      result: JSON.stringify({
+        success: false,
+        error_code: "INTERNAL_ERROR",
+        message_to_patient: "I'm having trouble processing your appointment request right now. Please try again or call our office directly.",
+        technical_details: errorMessage.substring(0, 200)
       })
     };
   }
@@ -580,42 +821,113 @@ async function handleFindAppointmentSlots(params: any, practice: any, _vapiCallI
   try {
     // Validate practice configuration
     if (!practice.nexhealth_subdomain || !practice.nexhealth_location_id) {
+      console.error("Practice configuration incomplete:", {
+        subdomain: practice.nexhealth_subdomain,
+        locationId: practice.nexhealth_location_id
+      });
       return {
         result: JSON.stringify({
-          error: "Practice configuration incomplete.",
-          message: "Practice configuration is incomplete. Please contact support."
+          success: false,
+          error_code: "PRACTICE_CONFIG_INCOMPLETE",
+          message_to_patient: "Practice configuration is incomplete. Please contact support."
         })
       };
     }
 
-    const { service_description, requested_date, search_type } = params;
+    const { 
+      appointment_type_id, 
+      duration_minutes, 
+      requested_date, 
+      search_type,
+      // Legacy support for service_description
+      service_description 
+    } = params;
 
-    // Validate required parameters
-    if (!service_description) {
-      return {
-        result: JSON.stringify({
-          error: "Service description missing.",
-          message: "I need to know what type of service you're looking for. Could you tell me what kind of appointment you need?"
-        })
-      };
-    }
+    let finalAppointmentTypeId = appointment_type_id;
+    const finalDurationMinutes = duration_minutes;
 
-    // Map service description to NexHealth appointment type
-    const serviceMapping = await db.serviceMapping.findFirst({
-      where: {
-        practice_id: practice.id,
-        spoken_service_name: {
-          equals: service_description,
-          mode: 'insensitive'
+    // If appointment_type_id not provided, fall back to service_description mapping (legacy support)
+    if (!finalAppointmentTypeId && service_description) {
+      console.log("No appointment_type_id provided, falling back to service_description mapping...");
+      
+      // Search for service mapping with case-insensitive matching
+      let serviceMapping = await db.serviceMapping.findFirst({
+        where: {
+          practice_id: practice.id,
+          spoken_service_name: {
+            equals: service_description,
+            mode: 'insensitive'
+          }
+        }
+      });
+
+      // If no exact match, try common variations
+      if (!serviceMapping) {
+        console.log("No exact match found, trying variations...");
+        
+        const variations: string[] = [];
+        const lowerService = service_description.toLowerCase();
+        
+        // Build variations based on common patterns
+        if (lowerService.includes('clean')) {
+          variations.push('cleaning', 'general cleaning', 'prophy', 'prophylaxis');
+        }
+        if (lowerService.includes('check')) {
+          variations.push('checkup', 'check-up', 'examination', 'exam');
+        }
+        if (lowerService.includes('consult')) {
+          variations.push('consultation', 'new patient consultation', 'new patient');
+        }
+        
+        // Try each variation
+        for (const variation of variations) {
+          console.log(`Trying variation: ${variation}`);
+          serviceMapping = await db.serviceMapping.findFirst({
+            where: {
+              practice_id: practice.id,
+              spoken_service_name: {
+                equals: variation,
+                mode: 'insensitive'
+              }
+            }
+          });
+          if (serviceMapping) {
+            console.log(`Found mapping with variation: ${variation} -> ${serviceMapping.nexhealth_appointment_type_id}`);
+            break;
+          }
         }
       }
-    });
 
-    if (!serviceMapping) {
+      if (!serviceMapping) {
+        console.warn("No service mapping found for:", service_description);
+        
+        const availableMappings = await db.serviceMapping.findMany({
+          where: { practice_id: practice.id },
+          select: { spoken_service_name: true }
+        });
+        
+        const suggestionText = availableMappings.length > 0 
+          ? `Available services include: ${availableMappings.map(m => m.spoken_service_name).join(', ')}`
+          : "Please use the check_appointment_type tool first to determine the appointment type.";
+        
+        return {
+          result: JSON.stringify({
+            success: false,
+            error_code: "NO_SERVICE_MAPPING_FOUND",
+            message_to_patient: `I couldn't find a service called '${service_description}'. ${suggestionText}`
+          })
+        };
+      }
+
+      finalAppointmentTypeId = serviceMapping.nexhealth_appointment_type_id;
+    }
+
+    if (!finalAppointmentTypeId) {
       return {
         result: JSON.stringify({
-          error: "Service not found.",
-          message: `I'm sorry, I couldn't find a service called '${service_description}'. Can you describe it differently or choose from common services like cleaning or check-up?`
+          success: false,
+          error_code: "MISSING_APPOINTMENT_TYPE",
+          message_to_patient: "I need to know what type of appointment you're looking for. Please specify the appointment type or use the check_appointment_type tool first."
         })
       };
     }
@@ -625,11 +937,12 @@ async function handleFindAppointmentSlots(params: any, practice: any, _vapiCallI
     const searchDays = search_type === "specific_date" ? 1 : 30;
 
     console.log("Search parameters:", {
-      appointment_type_id: serviceMapping.nexhealth_appointment_type_id,
+      appointment_type_id: finalAppointmentTypeId,
       provider_ids: practice.nexhealth_selected_provider_ids,
       operatory_ids: practice.nexhealth_default_operatory_ids,
       start_date: startDate,
-      days: searchDays
+      days: searchDays,
+      duration_minutes: finalDurationMinutes
     });
 
     // Get appointment slots from NexHealth
@@ -637,7 +950,7 @@ async function handleFindAppointmentSlots(params: any, practice: any, _vapiCallI
       practice.nexhealth_subdomain,
       practice.nexhealth_location_id,
       {
-        appointment_type_id: serviceMapping.nexhealth_appointment_type_id,
+        appointment_type_id: finalAppointmentTypeId,
         provider_ids: practice.nexhealth_selected_provider_ids,
         operatory_ids: practice.nexhealth_default_operatory_ids.length > 0 ? practice.nexhealth_default_operatory_ids : undefined,
         start_date: startDate,
@@ -672,9 +985,10 @@ async function handleFindAppointmentSlots(params: any, practice: any, _vapiCallI
       const dateDisplay = search_type === "specific_date" ? `on ${requested_date}` : "in the next month";
       return {
         result: JSON.stringify({
+          success: false,
+          error_code: "NO_SLOTS_FOUND",
           available_slots: [],
-          appointment_type_id_for_booking: serviceMapping.nexhealth_appointment_type_id,
-          message: `I'm sorry, I don't see any openings for ${service_description} ${dateDisplay}. Would you like to try another date or should I check for the next available appointment?`
+          message_to_patient: `I'm sorry, I don't see any openings ${dateDisplay}. Would you like to try another date or should I check for the next available appointment?`
         })
       };
     }
@@ -705,24 +1019,28 @@ async function handleFindAppointmentSlots(params: any, practice: any, _vapiCallI
     
     return {
       result: JSON.stringify({
+        success: true,
         available_slots: limitedSlots,
-        appointment_type_id_for_booking: serviceMapping.nexhealth_appointment_type_id,
-        message: `Great! For ${service_description} ${dateContext}, I have these times available: ${slotDescriptions}. Which time works best for you?`
+        appointment_type_id: finalAppointmentTypeId,
+        message_to_patient: `Great! I have these times available ${dateContext}: ${slotDescriptions}. Which time works best for you?`
       })
     };
 
   } catch (error) {
     console.error("❌ Error finding appointment slots:", error);
+    const errorMessage = error instanceof Error ? error.message : "Unknown error";
     return {
       result: JSON.stringify({
-        error: "Slot search failed.",
-        message: "I'm having trouble checking availability right now. Please try again or call the office directly."
+        success: false,
+        error_code: "SLOT_SEARCH_FAILED",
+        message_to_patient: "I'm having trouble checking availability right now. Please try again or call the office directly.",
+        technical_details: errorMessage.substring(0, 200)
       })
     };
   }
 }
 
-async function handleBookAppointment(params: any, practice: any, _vapiCallId: string): Promise<ToolResponse> {
+async function handleBookAppointment(params: any, practice: any, vapiCallId: string): Promise<ToolResponse> {
   console.log("=== BOOKING APPOINTMENT ===");
   console.log("Parameters:", JSON.stringify(params, null, 2));
 
@@ -731,8 +1049,9 @@ async function handleBookAppointment(params: any, practice: any, _vapiCallId: st
     if (!practice.nexhealth_subdomain || !practice.nexhealth_location_id) {
       return {
         result: JSON.stringify({
-          error: "Practice configuration incomplete.",
-          message: "Practice configuration is incomplete. Please contact support."
+          success: false,
+          error_code: "PRACTICE_CONFIG_INCOMPLETE",
+          message_to_patient: "Practice configuration is incomplete. Please contact support."
         })
       };
     }
@@ -748,10 +1067,19 @@ async function handleBookAppointment(params: any, practice: any, _vapiCallId: st
     } = params;
 
     if (!patient_id || !provider_id || !appointment_type_id || !start_time || !end_time) {
+      console.warn("Missing required booking parameters:", {
+        patient_id: !!patient_id,
+        provider_id: !!provider_id,
+        appointment_type_id: !!appointment_type_id,
+        start_time: !!start_time,
+        end_time: !!end_time
+      });
+      
       return {
         result: JSON.stringify({
-          error: "Missing required booking information.",
-          message: "Missing required information for booking. Please try again."
+          success: false,
+          error_code: "MISSING_BOOKING_INFO",
+          message_to_patient: "I'm missing some information needed to book your appointment. Please try selecting a time slot again."
         })
       };
     }
@@ -771,13 +1099,17 @@ async function handleBookAppointment(params: any, practice: any, _vapiCallId: st
       }
     );
 
-    console.log("✅ Appointment booked successfully:", appointmentData.id);
+    console.log("✅ Appointment booked successfully:", {
+      appointmentId: appointmentData.id,
+      patientId: patient_id,
+      startTime: start_time
+    });
 
     // Update call log with booking details
     try {
       await db.callLog.updateMany({
         where: {
-          vapi_call_id: _vapiCallId,
+          vapi_call_id: vapiCallId,
           practice_id: practice.id
         },
         data: {
@@ -800,22 +1132,54 @@ async function handleBookAppointment(params: any, practice: any, _vapiCallId: st
     }
 
     const appointmentDate = new Date(start_time);
-    const dateStr = appointmentDate.toLocaleDateString();
-    const timeStr = appointmentDate.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+    const dateStr = appointmentDate.toLocaleDateString('en-US', { 
+      weekday: 'long', 
+      month: 'long', 
+      day: 'numeric' 
+    });
+    const timeStr = appointmentDate.toLocaleTimeString('en-US', { 
+      hour: 'numeric', 
+      minute: '2-digit',
+      hour12: true 
+    });
 
     return {
       result: JSON.stringify({
-        appointment_id: appointmentData.id.toString(),
-        confirmation_message: `Perfect! You're all set for ${dateStr} at ${timeStr}. Your appointment confirmation number is ${appointmentData.id}. We'll see you then!`
+        success: true,
+        nexhealth_appointment_id: appointmentData.id.toString(),
+        ehr_foreign_id: appointmentData.foreign_id?.toString() || null, // May not be available immediately
+        message_to_patient: `Perfect! You're all set for ${dateStr} at ${timeStr}. Your appointment confirmation number is ${appointmentData.id}. We'll see you then!`
       })
     };
 
   } catch (error) {
     console.error("❌ Error booking appointment:", error);
+    const errorMessage = error instanceof Error ? error.message : "Unknown error";
+    
+    // Provide specific error messages based on the error type
+    let userMessage = "I'm sorry, I couldn't complete your booking right now. Please try again or call the office directly.";
+    let errorCode = "BOOKING_FAILED";
+    
+    if (errorMessage.toLowerCase().includes('patient')) {
+      userMessage = "There was an issue with the patient information. Please try again or call our office.";
+      errorCode = "PATIENT_ERROR";
+    } else if (errorMessage.toLowerCase().includes('provider')) {
+      userMessage = "The selected provider is not available. Please try a different time or call our office.";
+      errorCode = "PROVIDER_ERROR";
+    } else if (errorMessage.toLowerCase().includes('time') || errorMessage.toLowerCase().includes('slot')) {
+      userMessage = "That time slot is no longer available. Please select a different time.";
+      errorCode = "TIME_SLOT_ERROR";
+    } else if (errorMessage.toLowerCase().includes('duplicate') || errorMessage.toLowerCase().includes('conflict')) {
+      userMessage = "There's a scheduling conflict. Please select a different time or call our office.";
+      errorCode = "SCHEDULING_CONFLICT";
+    }
+    
     return {
       result: JSON.stringify({
-        error: "Booking failed.",
-        message: "I'm sorry, I couldn't complete your booking right now. Please try again or call the office directly."
+        success: false,
+        error_code: errorCode,
+        message_to_patient: userMessage,
+        technical_details: errorMessage.substring(0, 200)
       })
     };
   }
