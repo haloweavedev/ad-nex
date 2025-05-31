@@ -69,7 +69,7 @@ export async function POST(request: NextRequest) {
       data: {
         practice_id: practice.id,
         spoken_service_name,
-        nexhealth_appointment_type_id,
+        nexhealth_appointment_type_id: nexhealth_appointment_type_id.toString(),
         default_duration_minutes,
       },
     });
